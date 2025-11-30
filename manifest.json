@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "AI标签分组",
+  "version": "1.0.0",
+  "description": "根据网页标题智能进行标签分组",
+  "permissions": [
+    "tabs",
+    "tabGroups",
+    "contextMenus",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_page": "options.html",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "AI标签分组"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
+
