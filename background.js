@@ -440,7 +440,11 @@ async function executeGrouping(ungroupedTabs, existingGroups, groupingResult) {
       if (allTabIds.length > 0) {
         console.log(`[AI分组] 合并标签到分组"${groupName}"，总标签数:`, allTabIds.length);
         try {
-          await chrome.tabs.group({ tabIds: allTabIds });
+          const groupId = await chrome.tabs.group({ tabIds: allTabIds });
+          await chrome.tabGroups.update(groupId, {
+            title: groupName,
+            color: getRandomColor()
+          });
           console.log(`[AI分组] ✅ 已添加到分组"${groupName}"`);
         } catch (error) {
           console.error(`[AI分组] ❌ 添加到分组"${groupName}"失败:`, error);
