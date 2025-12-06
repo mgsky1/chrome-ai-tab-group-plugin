@@ -125,6 +125,30 @@
     .api-key-link:hover {
       text-decoration: underline;
     }
+
+    .default-provider-group {
+      margin-top: 15px;
+      padding: 12px;
+      background: #f8f9fa;
+      border-radius: 8px;
+      border: 1px solid #e0e0e0;
+    }
+
+    .default-provider-group label {
+      display: flex;
+      align-items: center;
+      cursor: pointer;
+      margin-bottom: 0;
+      font-weight: 400;
+      color: #555;
+    }
+
+    .default-provider-group input[type="checkbox"] {
+      width: auto;
+      margin-right: 8px;
+      cursor: pointer;
+      accent-color: #667eea;
+    }
   </style>
 </head>
 <body>
@@ -137,6 +161,7 @@
         <label for="aiProvider">AI供应商</label>
         <select id="aiProvider" name="aiProvider">
           <option value="deepseek">DeepSeek</option>
+          <option value="openrouter">openrouter</option>
         </select>
         <div class="help-text">选择用于智能分组的AI服务提供商</div>
       </div>
@@ -149,10 +174,53 @@
           name="deepseekApiKey" 
           placeholder="请输入您的DeepSeek API Key"
         >
+        <div class="default-provider-group">
+          <label for="deepseekDefaultProvider">
+            <input 
+              type="checkbox" 
+              id="deepseekDefaultProvider" 
+              name="deepseekDefaultProvider"
+            >
+            <span>设为默认供应商</span>
+          </label>
+        </div>
         <div class="help-text">
           获取API Key: 
           <a href="https://platform.deepseek.com/api_keys" target="_blank" class="api-key-link">
             https://platform.deepseek.com/api_keys
+          </a>
+        </div>
+      </div>
+      <div class="form-group" id="openrouterConfig">
+        <label for="openrouterApiKey">OpenRouter API Key</label>
+        <input 
+          type="password" 
+          id="openrouterApiKey" 
+          name="openrouterApiKey" 
+          placeholder="请输入您的OpenRouter API Key"
+        >
+        <div style="margin: 10px;"></div>
+        <label for="openrouterModel">调用的AI模型</label>
+        <input 
+          type="text" 
+          id="openrouterModel" 
+          name="openrouterModel" 
+          placeholder="请输入要调用的模型"
+        >
+        <div class="default-provider-group">
+          <label for="openrouterDefaultProvider">
+            <input 
+              type="checkbox" 
+              id="openrouterDefaultProvider" 
+              name="openrouterDefaultProvider"
+            >
+            <span>设为默认供应商</span>
+          </label>
+        </div>
+        <div class="help-text">
+          获取API Key和模型: 
+          <a href="https://openrouter.ai/" target="_blank" class="api-key-link">
+            https://openrouter.ai/
           </a>
         </div>
       </div>
