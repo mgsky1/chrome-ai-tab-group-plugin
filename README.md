@@ -2,6 +2,20 @@
 
 一个智能的 Chrome 浏览器插件，可以根据网页标题自动对标签页进行分组。
 
+# ScreenShot
+
+系统菜单
+
+![](./assets/options.png)
+
+配置界面
+
+![](./assets/config.png)
+
+实现效果
+
+![](./assets/preview.png)
+
 ## 注意
 该项目基本骨架由AI实现，使用工具为[cursor](https://cursor.com/cn)
 
