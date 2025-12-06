@@ -40,7 +40,7 @@ prompt
 1. 点击插件图标，选择"打开设置"
 2. 在设置页面中：
    - 选择 AI 供应商（默认 DeepSeek）
-   - 输入 DeepSeek API Key（获取地址：https://platform.deepseek.com/api_keys）
+   - 输入API信息
 3. 点击"保存设置"
 
 ### 分组标签页
@@ -70,8 +70,6 @@ ai-tab/
 ├── options.js             # 设置页面逻辑
 ├── popup.html             # 弹出窗口
 ├── popup.js               # 弹出窗口逻辑
-├── ai-services/           # AI服务提供商
-│   └── deepseek.js        # DeepSeek 实现
 └── icons/                 # 插件图标（需要自行添加）
     ├── icon16.png
     ├── icon48.png
@@ -80,26 +78,12 @@ ai-tab/
 
 ## 扩展新的AI供应商
 
-要添加新的 AI 供应商，请按以下步骤：
+要添加新的 AI 供应商，主要步骤
+- `options.html`添加新的供应商
+- `options.js`实现API数据存储
+- `background.js`实现大模型调用
 
-1. 在 `ai-services/` 目录下创建新的服务文件（如 `openai.js`）
-2. 实现 `groupTabs(tabTitles, existingGroups)` 方法
-3. 在 `background.js` 的 `getAIService()` 函数中添加新的供应商判断
-4. 在 `options.html` 中添加新的供应商选项
-5. 在 `options.js` 中添加相应的配置项处理
-
-示例：
-
-```javascript
-// ai-services/openai.js
-class OpenAIService {
-  async groupTabs(tabTitles, existingGroups) {
-    // 实现分组逻辑
-    // 返回格式：{ newGroups: {...}, existingGroups: {...} }
-  }
-}
-export { OpenAIService };
-```
+如果供应商API支持的是OpenAI标准，那么流程大同小异，参考现有实现即可。如果有其他协议实现，需要自行适配。
 
 ## 注意事项
 
@@ -110,8 +94,6 @@ export { OpenAIService };
 ## 开发说明
 
 ### 关于右键菜单
-
-**重要说明**：Chrome API **不支持**在标签页上直接右键显示自定义菜单项（`contexts: ['tab']` 不存在）。这是 Chrome 扩展 API 的限制。
 
 本插件提供了以下替代方案：
 - **页面右键菜单**：使用 `contexts: ['page']`，在页面内容区域右键时显示"AI分组"选项
