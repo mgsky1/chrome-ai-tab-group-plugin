@@ -1,18 +1,36 @@
-# 系统文件
-.DS_Store
-Thumbs.db
-
-# 编辑器
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# 日志
+# Logs
+logs
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
 
-# 临时文件
-*.tmp
-*.temp
+node_modules
+.DS_Store
+dist
+dist-ssr
+coverage
+*.local
 
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+*.tsbuildinfo
+
+.eslintcache
+
+# Cypress
+/cypress/videos/
+/cypress/screenshots/
+
+# Vitest
+__screenshots__/
