@@ -8,5 +8,9 @@
         "default_title": "AI标签分组" 
     },
     "options_page": "src/pages/options/index.html",
-    "host_permissions": ["<all_urls>"]
+    "host_permissions": ["<all_urls>"],
+    "background": {
+        "service_worker": "src/background/background.ts",
+        "type": "module"
+    }
 }
