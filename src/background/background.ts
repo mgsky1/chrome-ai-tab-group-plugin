@@ -170,7 +170,7 @@ async function groupTabs() {
 }
 
 // 监听来自popup的消息
-chrome.runtime.onMessage.addListener(async (request, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     log('[AI分组] 收到消息');
     if (request.action === 'groupTabs') {
         log('[AI分组] 从popup触发分组...');
