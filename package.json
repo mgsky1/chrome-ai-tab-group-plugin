@@ -20,9 +20,12 @@
   },
   "dependencies": {
     "@crxjs/vite-plugin": "^2.3.0",
-    "@langchain/core": "^1.1.7",
+    "@langchain/community": "^1.1.1",
+    "@langchain/core": "^1.1.8",
+    "@langchain/textsplitters": "^1.0.1",
     "@types/chrome": "^0.1.32",
-    "langchain": "^1.2.2",
+    "cheerio": "^1.1.2",
+    "langchain": "^1.2.3",
     "pinia": "^3.0.4",
     "vue": "^3.5.25",
     "vue-router": "^4.6.3"
