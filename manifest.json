@@ -1,6 +1,6 @@
 {
     "manifest_version": 3,
-    "name": "Chrome Extension Template",
+    "name": "Ai-tab",
     "version": "1.0.0",
     "description": "根据网页标题和内容智能进行标签分组",
     "action": { 
