@@ -1,8 +1,7 @@
 import AiTabService from './aiServive'
 import { log } from './aiServive';
 import type { TabInfo, GroupInfo, AiConfig } from './aiServive';
-import { getDefaultProvider } from './configStorage';
-
+import { getDefaultProvider, getAllProviderTypes } from './configStorage';
 const TAB_HTML_TIMEOUT = 5000; // 5秒超时
 
 // 获取所有标签页信息（只获取普通窗口中的标签页）
@@ -97,7 +96,7 @@ async function getTabHTML(tabId: number): Promise<string | null> {
                     const elements = clone.querySelectorAll(tag);
                     elements.forEach(el => el.remove());
                 })
-                return clone.textContent.trim().replace(/\s+/g, ' ');
+                return (clone.textContent || '').trim().replace(/\s+/g, ' ');
             }
         });
         if (results && results[0] && results[0].result) {
@@ -124,6 +123,17 @@ async function getTabsInGroup(groupId: number) {
 async function groupTabs() {
     log('[AI分组] ========== 开始分组流程 ==========');
     try {
+        // 首先检查是否有可用的供应商类型
+        const providerTypes = await getAllProviderTypes();
+        if (Object.keys(providerTypes).length === 0) {
+            log('[AI分组] ❌ 没有配置任何AI供应商类型，请先在设置页面添加供应商类型');
+            throw new Error('没有配置任何AI供应商类型，请先在设置页面添加供应商类型');
+        }
+        const defaultProvider = await getDefaultProvider();
+        if (!defaultProvider) {
+            log('[AI分组] ❌ 没有配置默认AI供应商');
+            throw new Error('没有配置默认AI供应商');
+        }
         // 获取所有标签页
         log('[AI分组] 步骤1: 获取所有标签页...');
         const allTabs = await getAllTabs();
@@ -148,11 +158,6 @@ async function groupTabs() {
 
         // 获取AI服务
         log('[AI分组] 步骤4: 初始化AI服务...');
-        const defaultProvider = await getDefaultProvider();
-        if (!defaultProvider) {
-            log('[AI分组] ❌ 没有配置AI供应商，请先在设置页面添加供应商');
-            throw new Error('没有配置AI供应商，请先在设置页面添加供应商');
-        }
 
         const aiConfig: AiConfig = {
             key: defaultProvider.key,
@@ -166,6 +171,7 @@ async function groupTabs() {
         log('[AI分组] AI服务初始化成功');
     } catch (err) {
         console.log(err);
+        throw err;
     }
 }
 
@@ -179,7 +185,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             sendResponse({ success: true });
         }).catch(err => {
             log('[AI分组] popup触发分组失败');
-            sendResponse({ success: false });
+            sendResponse({ success: false, error: err.message });
         })
         return true;
     }

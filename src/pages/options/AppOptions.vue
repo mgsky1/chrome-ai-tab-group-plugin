@@ -3,6 +3,10 @@
     <h1>AI标签分组设置</h1>
     <p class="subtitle">配置AI供应商和API密钥</p>
 
+    <!-- 高级管理区域 -->
+    <div class="management-section">
+      <router-link to="/provider-types" class="btn" style="text-decoration: none;">管理AI供应商类型</router-link>
+    </div>
 
     <!-- 添加/编辑供应商表单 -->
     <form id="settingsForm" @submit.prevent="saveConfig">
@@ -10,14 +14,14 @@
         <label for="aiProvider">AI供应商</label>
         <select id="aiProvider" name="aiProvider" v-model="selectedProviderType">
           <option v-for="(info, type) in providerTypes" :key="type" :value="type">
-            {{ info.name }}
+            {{ info?.name }}
           </option>
         </select>
         <div class="help-text">选择用于智能分组的AI服务提供商</div>
       </div>
 
-      <div class="form-group" v-if="selectedProviderType">
-        <label for="apiKey">{{ providerTypes[selectedProviderType].name }} API Key</label>
+      <div class="form-group" v-if="selectedProviderType && providerTypes[selectedProviderType]">
+        <label for="apiKey">{{ providerTypes[selectedProviderType]?.name }} API Key</label>
         <input type="password" id="apiKey" name="apiKey" placeholder="请输入您的API Key" v-model="apiKey" required>
         <div style="margin: 10px;"></div>
         <label for="aiModel">调用的AI模型</label>
@@ -30,8 +34,8 @@
         </div>
         <div class="help-text">
           获取API Key和模型:
-          <a :href="providerTypes[selectedProviderType].helpUrl" target="_blank" class="api-key-link">
-            {{ providerTypes[selectedProviderType].helpUrl }}
+          <a :href="providerTypes[selectedProviderType]?.helpUrl" target="_blank" class="api-key-link">
+            {{ providerTypes[selectedProviderType]?.helpUrl }}
           </a>
         </div>
       </div>
@@ -50,13 +54,14 @@ import { ref, onMounted, watch } from 'vue';
 import {
   loadAiConfig,
   saveProvider,
-  PROVIDER_TYPES,
   getProviderByType,
-  type ProviderType
+  loadProviderTypesConfig,
+  type ProviderType,
+  type ProviderTypesConfig,
 } from '../../background/configStorage';
 import type { AiProvider } from '../../background/aiServive';
 
-const providerTypes = PROVIDER_TYPES;
+const providerTypes = ref<ProviderTypesConfig>({});
 const providers = ref<AiProvider[]>([]);
 const selectedProviderType = ref<ProviderType>('openrouter');
 const apiKey = ref('');
@@ -80,6 +85,17 @@ async function loadProviders() {
     showStatus('加载配置失败: ' + (error as Error).message, 'error');
   }
 }
+
+// 加载供应商类型配置
+async function loadProviderTypes() {
+  try {
+    const types = await loadProviderTypesConfig();
+    providerTypes.value = types;
+  } catch (error) {
+    showStatus('加载供应商类型失败: ' + (error as Error).message, 'error');
+  }
+}
+
 
 // 加载指定供应商类型的配置
 async function loadProviderConfig(providerType: ProviderType) {
@@ -136,7 +152,15 @@ function showStatus(message: string, type: 'success' | 'error') {
 
 // 初始化
 onMounted(async () => {
+  await loadProviderTypes();
   await loadProviders();
+  
+  // 确保选中的供应商类型存在
+  const availableTypes = Object.keys(providerTypes.value);
+  if (availableTypes.length > 0 && !availableTypes.includes(selectedProviderType.value)) {
+    selectedProviderType.value = availableTypes[0] as ProviderType;
+  }
+  
   await loadProviderConfig(selectedProviderType.value);
 });
 </script>
@@ -270,5 +294,29 @@ onMounted(async () => {
   background: #f8d7da;
   color: #721c24;
   border: 1px solid #f5c6cb;
+}
+
+/* 高级管理样式 */
+.management-section {
+  margin-bottom: 30px;
+  padding: 20px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  border: 1px solid #e0e0e0;
+}
+
+.management-section h2 {
+  font-size: 20px;
+  color: #333;
+  margin-bottom: 15px;
+  margin-top: 0;
+}
+
+.btn-secondary {
+  background: #6c757d;
+}
+
+.btn-secondary:hover {
+  background: #5a6268;
 }
 </style>

@@ -28,7 +28,7 @@
     "langchain": "^1.2.3",
     "pinia": "^3.0.4",
     "vue": "^3.5.25",
-    "vue-router": "^4.6.3"
+    "vue-router": "^4.6.4"
   },
   "devDependencies": {
     "@prettier/plugin-oxc": "^0.0.5",

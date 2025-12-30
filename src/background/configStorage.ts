@@ -1,11 +1,28 @@
 import type { AiConfigStorage, AiProvider } from './aiServive';
 
 const STORAGE_KEY = 'aiConfigStorage';
+const PROVIDER_TYPES_STORAGE_KEY = 'providerTypesConfig';
 
 /**
- * 供应商类型定义和默认配置
+ * 供应商类型信息定义
  */
-export const PROVIDER_TYPES = {
+export type ProviderTypeInfo = {
+    name: string;
+    baseUrl: string;
+    helpUrl: string;
+};
+
+/**
+ * 供应商类型配置
+ */
+export type ProviderTypesConfig = {
+    [key: string]: ProviderTypeInfo;
+};
+
+/**
+ * 默认供应商类型配置
+ */
+const DEFAULT_PROVIDER_TYPES: ProviderTypesConfig = {
     openrouter: {
         name: 'OpenRouter',
         baseUrl: 'https://openrouter.ai/api/v1',
@@ -16,9 +33,114 @@ export const PROVIDER_TYPES = {
         baseUrl: 'https://api.deepseek.com',
         helpUrl: 'https://api-docs.deepseek.com/zh-cn/'
     }
-} as const;
+};
 
-export type ProviderType = keyof typeof PROVIDER_TYPES;
+export type ProviderType = string;
+
+/**
+ * 加载供应商类型配置
+ */
+export async function loadProviderTypesConfig(): Promise<ProviderTypesConfig> {
+    try {
+        const result = await chrome.storage.local.get(PROVIDER_TYPES_STORAGE_KEY);
+        if (result[PROVIDER_TYPES_STORAGE_KEY]) {
+            return result[PROVIDER_TYPES_STORAGE_KEY] as ProviderTypesConfig;
+        }
+        // 返回默认配置
+        return DEFAULT_PROVIDER_TYPES;
+    } catch (error) {
+        console.error('加载供应商类型配置失败:', error);
+        return DEFAULT_PROVIDER_TYPES;
+    }
+}
+
+/**
+ * 保存供应商类型配置
+ */
+export async function saveProviderTypesConfig(config: ProviderTypesConfig): Promise<void> {
+    try {
+        await chrome.storage.local.set({ [PROVIDER_TYPES_STORAGE_KEY]: config });
+    } catch (error) {
+        console.error('保存供应商类型配置失败:', error);
+        throw error;
+    }
+}
+
+/**
+ * 添加新的供应商类型
+ */
+export async function addProviderType(
+    type: string,
+    info: ProviderTypeInfo
+): Promise<void> {
+    const config = await loadProviderTypesConfig();
+    if (config[type]) {
+        throw new Error(`供应商类型 ${type} 已存在`);
+    }
+    config[type] = info;
+    await saveProviderTypesConfig(config);
+}
+
+/**
+ * 更新供应商类型
+ */
+export async function updateProviderType(
+    type: string,
+    info: ProviderTypeInfo
+): Promise<void> {
+    const config = await loadProviderTypesConfig();
+    if (!config[type]) {
+        throw new Error(`供应商类型 ${type} 不存在`);
+    }
+    config[type] = info;
+    await saveProviderTypesConfig(config);
+}
+
+/**
+ * 删除供应商类型
+ */
+export async function deleteProviderType(type: string): Promise<void> {
+    const providerTypesConfig = await loadProviderTypesConfig();
+    if (!providerTypesConfig[type]) {
+        throw new Error(`供应商类型 ${type} 不存在`);
+    }
+    
+    const providerInfo = providerTypesConfig[type];
+    
+    // 删除供应商类型
+    delete providerTypesConfig[type];
+    await saveProviderTypesConfig(providerTypesConfig);
+    
+    // 清理该类型下所有已配置的用户信息
+    const aiConfig = await loadAiConfig();
+    if (providerInfo) {
+        // 过滤掉该类型的供应商
+        aiConfig.providers = aiConfig.providers.filter(p => p.name !== providerInfo.name);
+        
+        // 如果默认供应商被删除，清空默认供应商ID
+        if (aiConfig.defaultProviderId && 
+            !aiConfig.providers.find(p => p.id === aiConfig.defaultProviderId)) {
+            aiConfig.defaultProviderId = undefined;
+        }
+        
+        await saveAiConfig(aiConfig);
+    }
+}
+
+/**
+ * 获取所有供应商类型
+ */
+export async function getAllProviderTypes(): Promise<ProviderTypesConfig> {
+    return await loadProviderTypesConfig();
+}
+
+/**
+ * 获取供应商类型信息
+ */
+export async function getProviderTypeInfo(type: string): Promise<ProviderTypeInfo | null> {
+    const config = await loadProviderTypesConfig();
+    return config[type] || null;
+}
 
 /**
  * 加载AI配置存储
@@ -61,8 +183,7 @@ export async function saveAiConfig(config: AiConfigStorage): Promise<void> {
 export async function getDefaultProvider(): Promise<AiProvider | null> {
     const config = await loadAiConfig();
     if (!config.defaultProviderId) {
-        // 如果没有设置默认供应商，返回第一个供应商
-        return config.providers.length > 0 ? (config.providers[0] ?? null) : null;
+       return null;
     }
     return config.providers.find(p => p.id === config.defaultProviderId) ?? null;
 }
@@ -77,7 +198,12 @@ export async function saveProvider(
     isDefault: boolean
 ): Promise<string> {
     const config = await loadAiConfig();
-    const providerInfo = PROVIDER_TYPES[providerType];
+    const providerTypes = await loadProviderTypesConfig();
+    const providerInfo = providerTypes[providerType];
+    
+    if (!providerInfo) {
+        throw new Error(`供应商类型 ${providerType} 不存在`);
+    }
 
     // 检查是否已存在该类型的供应商
     const existingIndex = config.providers.findIndex(p => p.name === providerInfo.name);
@@ -161,7 +287,10 @@ export async function setDefaultProvider(id: string): Promise<void> {
  */
 export async function getProviderByType(providerType: ProviderType): Promise<AiProvider | null> {
     const config = await loadAiConfig();
-    const providerInfo = PROVIDER_TYPES[providerType];
+    const providerTypes = await loadProviderTypesConfig();
+    const providerInfo = providerTypes[providerType];
+    if (!providerInfo) {
+        return null;
+    }
     return config.providers.find(p => p.name === providerInfo.name) || null;
 }
-
