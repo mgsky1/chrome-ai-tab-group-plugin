@@ -1,6 +1,8 @@
 # ai-tab-vue
 
-This template should help get you started developing with Vue 3 in Vite.
+基于 Vue 3 in Vite开发的 Chrome AI标签分组插件.
+
+目前已提交Chrome应用商店审核
 
 ## Recommended IDE Setup
 
