@@ -8,7 +8,7 @@
       <div class="section-header">
         <button type="button" class="btn" @click="showAddProviderTypeForm">添加供应商类型</button>
       </div>
-      
+
       <!-- 供应商类型列表 -->
       <div class="providers-list">
         <div v-for="(info, type) in providerTypes" :key="type" class="provider-card">
@@ -19,7 +19,8 @@
             </div>
             <div class="provider-actions">
               <button type="button" class="btn-small" @click="editProviderType(String(type))">编辑</button>
-              <button type="button" class="btn-small btn-danger" @click="deleteProviderTypeHandler(String(type))">删除</button>
+              <button type="button" class="btn-small btn-danger"
+                @click="deleteProviderTypeHandler(String(type))">删除</button>
             </div>
           </div>
           <div class="provider-details">
@@ -42,38 +43,23 @@
       <form @submit.prevent="saveProviderType">
         <div class="form-group">
           <label for="providerTypeKey">供应商类型键值</label>
-          <input 
-            type="text" 
-            id="providerTypeKey" 
-            v-model="newProviderTypeKey" 
-            :disabled="!!editingProviderTypeKey"
-            placeholder="例如: openai, anthropic"
-            required
-          >
+          <input type="text" id="providerTypeKey" v-model="newProviderTypeKey" :disabled="!!editingProviderTypeKey"
+            placeholder="例如: openai, anthropic" required>
           <div class="help-text">供应商类型的唯一标识符，不能修改</div>
         </div>
-        
+
         <div class="form-group">
           <label for="providerTypeBaseUrl">baseURL(用于发起API调用)</label>
-          <input 
-            type="url" 
-            id="providerTypeBaseUrl" 
-            v-model="newProviderTypeBaseUrl" 
-            placeholder="https://api.openai.com/v1"
-            required
-          >
+          <input type="url" id="providerTypeBaseUrl" v-model="newProviderTypeBaseUrl"
+            placeholder="https://api.openai.com/v1" required>
         </div>
-        
+
         <div class="form-group">
           <label for="providerTypeHelpUrl">帮助URL(可选)</label>
-          <input 
-            type="url" 
-            id="providerTypeHelpUrl" 
-            v-model="newProviderTypeHelpUrl" 
-            placeholder="https://platform.openai.com/docs"
-          >
+          <input type="url" id="providerTypeHelpUrl" v-model="newProviderTypeHelpUrl"
+            placeholder="https://platform.openai.com/docs">
         </div>
-        
+
         <div class="form-actions">
           <button type="submit" class="btn">{{ editingProviderTypeKey ? '更新' : '添加' }}</button>
           <button type="button" class="btn btn-secondary" @click="cancelProviderTypeForm">取消</button>
@@ -90,15 +76,18 @@
     <div v-if="statusMessage" :class="['status', statusType]">
       {{ statusMessage }}
     </div>
+    <div style="margin-top: 20px;">
+      <router-link to="/privacy" style="margin-right: 20px;">隐私政策</router-link>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { 
-  getAllProviderTypes, 
-  addProviderType, 
-  updateProviderType, 
+import {
+  getAllProviderTypes,
+  addProviderType,
+  updateProviderType,
   deleteProviderType,
   type ProviderTypesConfig,
   type ProviderTypeInfo

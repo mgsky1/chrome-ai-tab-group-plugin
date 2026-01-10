@@ -46,6 +46,9 @@
     <div v-if="statusMessage" :class="['status', statusType]">
       {{ statusMessage }}
     </div>
+    <div style="margin-top: 20px;">
+      <router-link to="/privacy" style="margin-right: 20px;">隐私政策</router-link>
+    </div>
   </div>
 </template>
 
@@ -154,13 +157,13 @@ function showStatus(message: string, type: 'success' | 'error') {
 onMounted(async () => {
   await loadProviderTypes();
   await loadProviders();
-  
+
   // 确保选中的供应商类型存在
   const availableTypes = Object.keys(providerTypes.value);
   if (availableTypes.length > 0 && !availableTypes.includes(selectedProviderType.value)) {
     selectedProviderType.value = availableTypes[0] as ProviderType;
   }
-  
+
   await loadProviderConfig(selectedProviderType.value);
 });
 </script>

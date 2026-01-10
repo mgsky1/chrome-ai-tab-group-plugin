@@ -23,16 +23,7 @@ export type ProviderTypesConfig = {
  * 默认供应商类型配置
  */
 const DEFAULT_PROVIDER_TYPES: ProviderTypesConfig = {
-    openrouter: {
-        name: 'OpenRouter',
-        baseUrl: 'https://openrouter.ai/api/v1',
-        helpUrl: 'https://openrouter.ai/'
-    },
-    DeepSeek: {
-        name: 'DeepSeek',
-        baseUrl: 'https://api.deepseek.com',
-        helpUrl: 'https://api-docs.deepseek.com/zh-cn/'
-    }
+
 };
 
 export type ProviderType = string;
@@ -104,25 +95,25 @@ export async function deleteProviderType(type: string): Promise<void> {
     if (!providerTypesConfig[type]) {
         throw new Error(`供应商类型 ${type} 不存在`);
     }
-    
+
     const providerInfo = providerTypesConfig[type];
-    
+
     // 删除供应商类型
     delete providerTypesConfig[type];
     await saveProviderTypesConfig(providerTypesConfig);
-    
+
     // 清理该类型下所有已配置的用户信息
     const aiConfig = await loadAiConfig();
     if (providerInfo) {
         // 过滤掉该类型的供应商
         aiConfig.providers = aiConfig.providers.filter(p => p.name !== providerInfo.name);
-        
+
         // 如果默认供应商被删除，清空默认供应商ID
-        if (aiConfig.defaultProviderId && 
+        if (aiConfig.defaultProviderId &&
             !aiConfig.providers.find(p => p.id === aiConfig.defaultProviderId)) {
             aiConfig.defaultProviderId = undefined;
         }
-        
+
         await saveAiConfig(aiConfig);
     }
 }
@@ -183,7 +174,7 @@ export async function saveAiConfig(config: AiConfigStorage): Promise<void> {
 export async function getDefaultProvider(): Promise<AiProvider | null> {
     const config = await loadAiConfig();
     if (!config.defaultProviderId) {
-       return null;
+        return null;
     }
     return config.providers.find(p => p.id === config.defaultProviderId) ?? null;
 }
@@ -200,7 +191,7 @@ export async function saveProvider(
     const config = await loadAiConfig();
     const providerTypes = await loadProviderTypesConfig();
     const providerInfo = providerTypes[providerType];
-    
+
     if (!providerInfo) {
         throw new Error(`供应商类型 ${providerType} 不存在`);
     }
