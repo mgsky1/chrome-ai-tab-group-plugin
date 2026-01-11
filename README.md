@@ -2,7 +2,7 @@
 
 基于 Vue 3 in Vite开发的 Chrome AI标签分组插件.
 
-目前已提交Chrome应用商店审核
+[Chrome应用商店下载地址](https://chromewebstore.google.com/detail/ai-tab/gkkilbkkklfjacnleenilelejbnamjjh?hl=zh-CN&utm_source=ext_sidebar)
 
 ## Recommended IDE Setup
 
