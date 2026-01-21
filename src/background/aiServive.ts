@@ -2,6 +2,11 @@ const DEBUG = false;
 
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
+import { Readability } from "@mozilla/readability";
+import { JSDOM } from "jsdom";
+
+const splitter = new RecursiveCharacterTextSplitter({ chunkSize: 200, chunkOverlap: 0 })
 
 export type TabInfo = {
     id?: number;
@@ -53,10 +58,6 @@ export function log(msg: any) {
         console.log(msg)
     }
 }
-
-import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
-
-const splitter = new RecursiveCharacterTextSplitter({ chunkSize: 200, chunkOverlap: 0 })
 
 export default class AiTabService {
     private ungroupTabInfos: TabInfo[];
@@ -491,6 +492,11 @@ export default class AiTabService {
                         tab.headText = splitResult[0];
                         tab.bodyText = extractMidText;
                     }
+                    const dom = new JSDOM(tab.html, { url: tab.url });
+                    const doc = dom.window.document;
+                    const reader = new Readability(doc);
+                    const article = reader.parse();
+                    log(`NEW--- ${article?.content}`)
                 } catch (error) {
                     log(`[AI分组] 标签页 ${tab.id} 文本分割失败: ${error}`);
                 }
