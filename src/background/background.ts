@@ -2,6 +2,7 @@ import AiTabService from './aiServive'
 import { log } from './aiServive';
 import type { TabInfo, GroupInfo, AiConfig } from './aiServive';
 import { getDefaultProvider, getAllProviderTypes } from './configStorage';
+import { parseHTML } from 'linkedom';
 const TAB_HTML_TIMEOUT = 5000; // 5秒超时
 
 // 获取所有标签页信息（只获取普通窗口中的标签页）
@@ -25,14 +26,15 @@ async function getAllTabs() {
     log('[AI分组] 开始获取所有标签页的HTML内容...');
 
     const result = await Promise.all(normalTabs.map(async tab => {
-        let html: string | undefined = undefined;
+        let doc: Document | undefined = undefined;
         if (tab.id) {
-            html = await getTabHTMLWithTimeout(tab.id, TAB_HTML_TIMEOUT);
+            doc = await getTabHTMLDocWithTimeout(tab.id, TAB_HTML_TIMEOUT);
         }
-        if (html) {
-            log(`[AI分组] 标签页 ${tab.id} (${tab.title}) HTML获取成功，长度: ${html.length}`);
+
+        if (doc) {
+            log(`[AI分组] 标签页 ${tab.id} (${tab.title}) Doc获取成功`);
         } else if (tab.id) {
-            log(`[AI分组] 标签页 ${tab.id} (${tab.title}) 获取HTML超时或失败`);
+            log(`[AI分组] 标签页 ${tab.id} (${tab.title}) 获取Doc超时或失败`);
         }
         return {
             id: tab.id,
@@ -40,7 +42,7 @@ async function getAllTabs() {
             url: tab.url,
             groupId: tab.groupId,
             windowId: tab.windowId,
-            html: html
+            doc: doc
         };
     }));
     log('[AI分组] 所有标签页HTML内容获取完成');
@@ -48,12 +50,12 @@ async function getAllTabs() {
 }
 
 // 包装getTabHTML为带有超时机制的函数
-async function getTabHTMLWithTimeout(tabId: number, timeout: number): Promise<string | undefined> {
+async function getTabHTMLDocWithTimeout(tabId: number, timeout: number): Promise<Document | undefined> {
     const result = await Promise.race([
-        getTabHTML(tabId),
-        new Promise<string | null>(resolve => setTimeout(() => resolve(null), timeout))
+        getTabHtmlDoc(tabId),
+        new Promise<Document | null>(resolve => setTimeout(() => resolve(null), timeout))
     ]);
-    return result ?? "";
+    return result ?? undefined;
 }
 
 // 获取未分组的标签页
@@ -72,8 +74,7 @@ async function getExistingGroups() {
     })))) as GroupInfo[]
 }
 
-// 获取标签页的 HTML 内容
-async function getTabHTML(tabId: number): Promise<string | null> {
+async function getTabHtmlDoc(tabId: number): Promise<Document | null> {
     try {
         // 检查标签页是否可访问（不能访问 chrome:// 等特殊页面）
         const tab = await chrome.tabs.get(tabId);
@@ -85,27 +86,41 @@ async function getTabHTML(tabId: number): Promise<string | null> {
         }
 
         // 执行脚本获取 HTML 内容
+        // 注意：不能直接返回 Document 对象，因为无法序列化
+        // 所以我们在 content script 中克隆 document 并转换为 HTML 字符串
         const results = await chrome.scripting.executeScript({
             target: { tabId: tabId },
             func: () => {
                 // 这个函数会在目标标签页的上下文中执行
-                const body = document.body;
-                const clone = body.cloneNode(true) as Element;
-                const removeTags = ['img', 'script', 'style', 'iframe', 'meta'];
-                removeTags.forEach(tag => {
-                    const elements = clone.querySelectorAll(tag);
-                    elements.forEach(el => el.remove());
-                })
-                return (clone.textContent || '').trim().replace(/\s+/g, ' ');
+                // 克隆整个 document 并返回其 HTML 字符串
+                const clonedDoc = document.cloneNode(true) as Document;
+                return clonedDoc.documentElement.outerHTML;
             }
         });
-        if (results && results[0] && results[0].result) {
-            return results[0].result as string;
+
+        if (!results || !results[0] || !results[0].result) {
+            log(`[AI分组] 标签页 ${tabId} 获取 HTML 内容失败：结果为空`);
+            return null;
         }
 
-        return null;
+        const htmlString = results[0].result as string;
+        if (!htmlString) {
+            log(`[AI分组] 标签页 ${tabId} 获取的 HTML 内容为空`);
+            return null;
+        }
+
+        // 使用 linkedom 将 HTML 字符串解析为 Document 对象
+        // linkedom 是轻量级的 DOM 实现，专门为浏览器环境设计，可以在 service worker 中使用
+        try {
+            const { document: doc } = parseHTML(htmlString);
+            log(`[AI分组] 标签页 ${tabId} 使用 linkedom 成功解析 Document 对象`);
+            return doc as Document;
+        } catch (error) {
+            log(`[AI分组] 标签页 ${tabId} 使用 linkedom 解析失败: ${error}`);
+            return null;
+        }
     } catch (error) {
-        log(`[AI分组] 获取标签页 ${tabId} 的 HTML 失败: ${error}`);
+        log(`[AI分组] 获取标签页 ${tabId} 的 Doc 失败: ${error}`);
         return null;
     }
 }

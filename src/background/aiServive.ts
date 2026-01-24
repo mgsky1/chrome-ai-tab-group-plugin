@@ -1,12 +1,12 @@
-const DEBUG = false;
+const DEBUG = true;
 
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
-import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
 import { Readability } from "@mozilla/readability";
-import { JSDOM } from "jsdom";
+import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
+import { loadSummarizationChain } from '@langchain/classic/chains';
 
-const splitter = new RecursiveCharacterTextSplitter({ chunkSize: 200, chunkOverlap: 0 })
+const splitter = new RecursiveCharacterTextSplitter({ chunkSize: 2000, chunkOverlap: 0 })
 
 export type TabInfo = {
     id?: number;
@@ -14,9 +14,8 @@ export type TabInfo = {
     url?: string;
     groupId?: number;
     windowId?: number;
-    html?: string;
-    headText?: string;
-    bodyText?: string;
+    doc?: Document;
+    summary?: string;
 };
 
 export type GroupInfo = {
@@ -73,7 +72,7 @@ export default class AiTabService {
     private buildPrompt() {
         let prompt = "请根据以下网页标题和网页摘要(首段摘要和页面中间摘要)对标签页进行智能分组。相同类型或主题的网页应该归为一组。\n";
         prompt += "待分组的标签页标题与摘要列表（索引从0开始）：\n";
-        prompt += this.ungroupTabInfos.map((tab, index) => `${index}: 标题:${tab.title}; 摘要: 【首段摘要如下】=>${tab.headText} 【页面中间摘要如下】=>${tab.bodyText}`).join('\n\n');
+        prompt += this.ungroupTabInfos.map((tab, index) => `${index}: 标题:${tab.title}; 摘要: ${tab.summary}`).join('\n\n');
         if (this.existGroup.length > 0) {
             prompt += "已存在的分组（如果新标签页属于某个已有分组，请将其归入该分组）：\n";
             this.existGroup.forEach(g => {
@@ -108,7 +107,7 @@ export default class AiTabService {
         return prompt;
     }
 
-    private async sendToAi(prompt: string) {
+    private getLLMInstance() {
         const chat = new ChatOpenAI(
             {
                 model: this.aiConfig.model,
@@ -120,7 +119,11 @@ export default class AiTabService {
                 }
             }
         );
-        const response = await chat.invoke([
+        return chat;
+    }
+
+    private async sendToAi(prompt: string) {
+        const response = await this.getLLMInstance().invoke([
             new SystemMessage("你是一个专业的网页标签分类助手。你需要根据网页标题对标签页进行智能分组。"),
             new HumanMessage(prompt)
         ])
@@ -467,38 +470,25 @@ export default class AiTabService {
                 }
 
                 log(`[AI分组] 处理标签页 ${tab.id}: ${tab.title}`);
-                if (!tab.html) {
+                if (!tab.doc) {
                     log(`[AI分组] 标签页 ${tab.id} 没有 HTML 内容`);
                     return;
                 }
 
                 try {
-                    const splitResult: string[] = await splitter.splitText(tab.html);
-                    log(`[AI分组] 标签页 ${tab.id} 分割结果数量: ${splitResult.length}`);
-
-                    if (splitResult.length == 0) {
-                        return;
-                    }
-                    if (splitResult.length == 1) {
-                        tab.headText = splitResult[0];
-                        tab.bodyText = splitResult[0];
-                    } else if (splitResult.length == 2) {
-                        tab.headText = splitResult[0];
-                        tab.bodyText = splitResult[1];
-                    } else {
-                        // 当分割结果大于2时，取第一段作为首段，取中间几段作为中间摘要
-                        const mid = Math.floor(splitResult.length / 2);
-                        const extractMidText = (splitResult[mid - 1] ?? '') + (splitResult[mid] ?? '') + (splitResult[mid + 1] ?? '');
-                        tab.headText = splitResult[0];
-                        tab.bodyText = extractMidText;
-                    }
-                    const dom = new JSDOM(tab.html, { url: tab.url });
-                    const doc = dom.window.document;
-                    const reader = new Readability(doc);
+                    const reader = new Readability(tab.doc ?? new Document());
                     const article = reader.parse();
-                    log(`NEW--- ${article?.content}`)
+                    const chunkContent = await splitter.createDocuments([article?.textContent ?? ''])
+                    const chain = loadSummarizationChain(this.getLLMInstance(), {
+                        type: 'map_reduce', // you can choose from map_reduce, stuff or refine
+                        verbose: DEBUG, // to view the steps in the console
+                    });
+                    const response = await chain.call({
+                        input_documents: chunkContent,
+                    });
+                    tab.summary = response.text;
                 } catch (error) {
-                    log(`[AI分组] 标签页 ${tab.id} 文本分割失败: ${error}`);
+                    log(`[AI分组] 标签页 ${tab.id} 网页总结失败: ${error}`);
                 }
             })
         );
