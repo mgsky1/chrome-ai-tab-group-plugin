@@ -31,12 +31,10 @@
             <input type="checkbox" id="isDefault" name="isDefault" v-model="isDefault">
             <span>设为默认供应商</span>
           </label>
-        </div>
-        <div class="help-text">
-          获取API Key和模型:
-          <a :href="providerTypes[selectedProviderType]?.helpUrl" target="_blank" class="api-key-link">
-            {{ providerTypes[selectedProviderType]?.helpUrl }}
-          </a>
+          <label for="useExactMode">
+            <input type="checkbox" id="useExactMode" name="useExactMode" v-model="useExactMode">
+            <span>精准分类(会消耗更多Token，分组耗时也会增加)</span>
+          </label>
         </div>
       </div>
 
@@ -70,6 +68,7 @@ const selectedProviderType = ref<ProviderType>('openrouter');
 const apiKey = ref('');
 const aiModel = ref('');
 const isDefault = ref(false);
+const useExactMode = ref(false)
 const editingProviderId = ref<string | null>(null);
 const statusMessage = ref('');
 const statusType = ref<'success' | 'error'>('success');
@@ -109,12 +108,14 @@ async function loadProviderConfig(providerType: ProviderType) {
       aiModel.value = existingProvider.model;
       isDefault.value = existingProvider.isDefault || false;
       editingProviderId.value = existingProvider.id;
+      useExactMode.value = existingProvider.useExactMode || false;
     } else {
       // 清空表单
       apiKey.value = '';
       aiModel.value = '';
       isDefault.value = providers.value.length === 0; // 如果没有供应商，默认设为默认
       editingProviderId.value = null;
+      useExactMode.value = false;
     }
   } catch (error) {
     console.error('加载供应商配置失败:', error);
@@ -133,7 +134,8 @@ async function saveConfig() {
       selectedProviderType.value,
       apiKey.value,
       aiModel.value,
-      isDefault.value
+      isDefault.value,
+      useExactMode.value
     );
 
     await loadProviders();

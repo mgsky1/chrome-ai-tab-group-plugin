@@ -177,7 +177,8 @@ async function groupTabs() {
         const aiConfig: AiConfig = {
             key: defaultProvider.key,
             model: defaultProvider.model,
-            baseUrl: defaultProvider.baseUrl
+            baseUrl: defaultProvider.baseUrl,
+            useExactMode: defaultProvider.useExactMode ?? false
         };
 
         log('[AI分组] 使用供应商: ' + defaultProvider.name + ', 模型: ' + defaultProvider.model);

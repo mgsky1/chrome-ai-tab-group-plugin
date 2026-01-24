@@ -28,10 +28,6 @@
               <span class="detail-label">baseURL(用于发起API调用):</span>
               <span class="detail-value">{{ info?.baseUrl }}</span>
             </div>
-            <div class="detail-item">
-              <span class="detail-label">帮助URL(可选):</span>
-              <span class="detail-value">{{ info?.helpUrl }}</span>
-            </div>
           </div>
         </div>
       </div>
@@ -52,12 +48,6 @@
           <label for="providerTypeBaseUrl">baseURL(用于发起API调用)</label>
           <input type="url" id="providerTypeBaseUrl" v-model="newProviderTypeBaseUrl"
             placeholder="https://api.openai.com/v1" required>
-        </div>
-
-        <div class="form-group">
-          <label for="providerTypeHelpUrl">帮助URL(可选)</label>
-          <input type="url" id="providerTypeHelpUrl" v-model="newProviderTypeHelpUrl"
-            placeholder="https://platform.openai.com/docs">
         </div>
 
         <div class="form-actions">
@@ -103,7 +93,6 @@ const router = useRouter()
 const showProviderTypeForm = ref(false)
 const newProviderTypeKey = ref('')
 const newProviderTypeBaseUrl = ref('')
-const newProviderTypeHelpUrl = ref('')
 const editingProviderTypeKey = ref<string | null>(null)
 
 // 显示状态消息
@@ -131,7 +120,6 @@ function showAddProviderTypeForm() {
   editingProviderTypeKey.value = null
   newProviderTypeKey.value = ''
   newProviderTypeBaseUrl.value = ''
-  newProviderTypeHelpUrl.value = ''
 }
 
 // 编辑供应商类型
@@ -142,7 +130,6 @@ function editProviderType(type: string) {
     editingProviderTypeKey.value = type
     newProviderTypeKey.value = type
     newProviderTypeBaseUrl.value = info.baseUrl
-    newProviderTypeHelpUrl.value = info.helpUrl
   }
 }
 
@@ -156,8 +143,7 @@ async function saveProviderType() {
 
     const providerInfo: ProviderTypeInfo = {
       name: newProviderTypeKey.value,
-      baseUrl: newProviderTypeBaseUrl.value,
-      helpUrl: newProviderTypeHelpUrl.value
+      baseUrl: newProviderTypeBaseUrl.value
     }
 
     if (editingProviderTypeKey.value) {
@@ -202,7 +188,6 @@ function cancelProviderTypeForm() {
   editingProviderTypeKey.value = null
   newProviderTypeKey.value = ''
   newProviderTypeBaseUrl.value = ''
-  newProviderTypeHelpUrl.value = ''
 }
 
 // 返回options页面

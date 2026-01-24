@@ -9,7 +9,6 @@ const PROVIDER_TYPES_STORAGE_KEY = 'providerTypesConfig';
 export type ProviderTypeInfo = {
     name: string;
     baseUrl: string;
-    helpUrl: string;
 };
 
 /**
@@ -186,7 +185,8 @@ export async function saveProvider(
     providerType: ProviderType,
     key: string,
     model: string,
-    isDefault: boolean
+    isDefault: boolean,
+    useExactMode: boolean
 ): Promise<string> {
     const config = await loadAiConfig();
     const providerTypes = await loadProviderTypesConfig();
@@ -204,7 +204,8 @@ export async function saveProvider(
         key,
         model,
         baseUrl: providerInfo.baseUrl,
-        isDefault
+        isDefault,
+        useExactMode
     };
 
     if (existingIndex !== -1) {

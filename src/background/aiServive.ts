@@ -16,6 +16,8 @@ export type TabInfo = {
     windowId?: number;
     doc?: Document;
     summary?: string;
+    headText?: string;
+    bodyText?: string;
 };
 
 export type GroupInfo = {
@@ -33,7 +35,8 @@ type AiGroupResult = {
 export type AiConfig = {
     key: string,
     model: string,
-    baseUrl: string
+    baseUrl: string,
+    useExactMode: boolean
 }
 
 // AI供应商配置
@@ -43,7 +46,8 @@ export type AiProvider = {
     key: string,
     model: string,
     baseUrl: string,
-    isDefault?: boolean  // 是否为默认供应商
+    isDefault?: boolean, // 是否为默认供应商
+    useExactMode?: boolean
 }
 
 // 存储所有AI供应商配置
@@ -69,7 +73,45 @@ export default class AiTabService {
         this.aiConfig = aiConfig;
     }
 
-    private buildPrompt() {
+    private buildNormalPrompt() {
+        let prompt = "请根据以下网页标题和网页摘要(首段摘要和页面中间摘要)对标签页进行智能分组。相同类型或主题的网页应该归为一组。\n";
+        prompt += "待分组的标签页标题与摘要列表（索引从0开始）：\n";
+        prompt += this.ungroupTabInfos.map((tab, index) => `${index}: 标题:${tab.title}; 摘要: 【首段摘要如下】=>${tab.headText} 【页面中间摘要如下】=>${tab.bodyText}`).join('\n\n');
+        if (this.existGroup.length > 0) {
+            prompt += "已存在的分组（如果新标签页属于某个已有分组，请将其归入该分组）：\n";
+            this.existGroup.forEach(g => {
+                prompt += "分组" + g.title + "包含的标签页:\n";
+                g.tabDetails?.forEach(t => {
+                    prompt += "- " + t.title + "\n";
+                })
+                prompt += "\n";
+            })
+        }
+        prompt += `请返回JSON格式的结果，格式如下：
+        {
+          "newGroups": {
+            "分组名称1": [标签索引1, 标签索引2, ...],
+            "分组名称2": [标签索引3, 标签索引4, ...]
+          },
+          "existingGroups": {
+            "已有分组名称": [标签索引1, 标签索引2, ...]
+          }
+        }
+        
+        规则：
+        1. 如果标签页可以归入已有分组，请将其放在"existingGroups"中对应的分组下
+        2. 如果标签页无法归入已有分组，请创建新分组，放在"newGroups"中
+        3. 分组名称应该简洁明了，能够概括该组标签的主题（2-6个中文字符）
+        4. 每个分组至少包含1个标签页
+        5. 所有待分组的标签页都必须被分配到一个分组中
+        6. 只返回JSON，不要包含其他文字说明
+        7. 只需要关注待分组的标签页
+        
+        请开始分析并返回JSON结果：`;
+        return prompt;
+    }
+
+    private buildExactPrompt() {
         let prompt = "请根据以下网页标题和网页摘要(首段摘要和页面中间摘要)对标签页进行智能分组。相同类型或主题的网页应该归为一组。\n";
         prompt += "待分组的标签页标题与摘要列表（索引从0开始）：\n";
         prompt += this.ungroupTabInfos.map((tab, index) => `${index}: 标题:${tab.title}; 摘要: ${tab.summary}`).join('\n\n');
@@ -460,7 +502,7 @@ export default class AiTabService {
     }
 
     public async group() {
-        log('[AI分组] 开始处理标签页文本分割...');
+        log('[AI分组] 开始处理标签页文本处理...');
         await Promise.all(
             this.ungroupTabInfos.map(async tab => {
                 // 跳过 chrome:// 和 chrome-extension:// 页面
@@ -475,27 +517,65 @@ export default class AiTabService {
                     return;
                 }
 
-                try {
-                    const reader = new Readability(tab.doc ?? new Document());
-                    const article = reader.parse();
-                    const chunkContent = await splitter.createDocuments([article?.textContent ?? ''])
-                    const chain = loadSummarizationChain(this.getLLMInstance(), {
-                        type: 'map_reduce', // you can choose from map_reduce, stuff or refine
-                        verbose: DEBUG, // to view the steps in the console
-                    });
-                    const response = await chain.call({
-                        input_documents: chunkContent,
-                    });
-                    tab.summary = response.text;
-                } catch (error) {
-                    log(`[AI分组] 标签页 ${tab.id} 网页总结失败: ${error}`);
+                if (this.aiConfig.useExactMode) {
+                    log(`[AI分组]使用精准模式，总结全文`)
+                    try {
+                        const reader = new Readability(tab.doc ?? new Document());
+                        const article = reader.parse();
+                        const chunkContent = await splitter.createDocuments([article?.textContent ?? ''])
+                        const chain = loadSummarizationChain(this.getLLMInstance(), {
+                            type: 'map_reduce', // you can choose from map_reduce, stuff or refine
+                            verbose: DEBUG, // to view the steps in the console
+                        });
+                        const response = await chain.call({
+                            input_documents: chunkContent,
+                        });
+                        tab.summary = response.text;
+                    } catch (error) {
+                        log(`[AI分组] 标签页 ${tab.id} 网页总结失败: ${error}`);
+                    }
+                } else {
+                    log(`[AI分组]使用普通模式，利用部分段落`)
+                    try {
+                        const body = tab.doc.body;
+                        const removeTags = ['img', 'script', 'style', 'iframe', 'meta'];
+                        removeTags.forEach(tag => {
+                            const elements = body.querySelectorAll(tag);
+                            elements.forEach(el => el.remove());
+                        })
+                        const splitResult: string[] = await splitter.splitText((body.textContent || '').trim().replace(/\s+/g, ' '));
+                        log(`[AI分组] 标签页 ${tab.id} 分割结果数量: ${splitResult.length}`);
+
+                        if (splitResult.length == 0) {
+                            return;
+                        }
+                        if (splitResult.length == 1) {
+                            tab.headText = splitResult[0];
+                            tab.bodyText = splitResult[0];
+                        } else if (splitResult.length == 2) {
+                            tab.headText = splitResult[0];
+                            tab.bodyText = splitResult[1];
+                        } else {
+                            // 当分割结果大于2时，取第一段作为首段，取中间段作为中间摘要
+                            const mid = Math.floor(splitResult.length / 2);
+                            const extractMidText = (splitResult[mid - 1] ?? '') + (splitResult[mid] ?? '') + (splitResult[mid + 1] ?? '');
+                            tab.headText = splitResult[0];
+                            tab.bodyText = extractMidText;
+                        }
+                    } catch (error) {
+                        log(`[AI分组] 标签页 ${tab.id} 文本分割失败: ${error}`);
+                    }
                 }
             })
         );
 
         log('[AI分组] 文本分割完成，开始构建提示词...');
-
-        const prompt = this.buildPrompt();
+        let prompt = '';
+        if (this.aiConfig.useExactMode) {
+            prompt = this.buildExactPrompt();
+        } else {
+            prompt = this.buildNormalPrompt();
+        }
         log(prompt)
         log('[AI分组] 提示词构建完成，开始调用AI...');
         const response = await this.sendToAi(prompt);
