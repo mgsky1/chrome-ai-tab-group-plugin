@@ -1,4 +1,4 @@
-const DEBUG = true;
+const DEBUG = false;
 
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
@@ -527,7 +527,7 @@ export default class AiTabService {
                             type: 'map_reduce', // you can choose from map_reduce, stuff or refine
                             verbose: DEBUG, // to view the steps in the console
                         });
-                        const response = await chain.call({
+                        const response = await chain.invoke({
                             input_documents: chunkContent,
                         });
                         tab.summary = response.text;
