@@ -260,3 +260,20 @@ chrome.runtime.onInstalled.addListener(() => {
         }
     });
 });
+
+// 监听标签页创建事件
+chrome.tabs.onCreated.addListener(function(tab) {    
+    log('新标签页已创建:' + tab);
+});
+
+// 监听标签页关闭事件
+chrome.tabs.onRemoved.addListener(function(tabId, removeInfo) {    
+    log('标签页已关闭，ID:'+ tabId);
+});
+
+// 监听标签页更新事件
+chrome.tabs.onUpdated.addListener(function(tabId, changeInfo, tab) {    
+    if (changeInfo.url) {        
+        log('标签页URL已更新:' + changeInfo.url);    
+    }
+});
