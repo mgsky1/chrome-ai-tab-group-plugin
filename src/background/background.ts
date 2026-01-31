@@ -1,9 +1,11 @@
 import AiTabService from './aiServive'
-import { log } from './aiServive';
+import { log, type PageSummaryResult } from './aiServive';
 import type { TabInfo, GroupInfo, AiConfig } from './aiServive';
 import { getDefaultProvider, getAllProviderTypes } from './configStorage';
 import { parseHTML } from 'linkedom';
 const TAB_HTML_TIMEOUT = 5000; // 5秒超时
+const SUMMARY_DEBOUNCE_DELAY = 2000; // 防抖延迟：2秒
+const SUMMARY_STORAGE_KEY = 'pageSummaries'; // LocalStorage 存储键名
 
 // 获取所有标签页信息（只获取普通窗口中的标签页）
 async function getAllTabs() {
@@ -261,19 +263,148 @@ chrome.runtime.onInstalled.addListener(() => {
     });
 });
 
+// 防抖定时器映射：tabId -> timeoutId
+const debounceTimers: Map<number, NodeJS.Timeout> = new Map();
+
+/**
+ * 保存网页总结结果到 LocalStorage
+ */
+async function savePageSummary(tabId: number, url: string, summary: PageSummaryResult) {
+    try {
+        const result = await chrome.storage.local.get(SUMMARY_STORAGE_KEY);
+        const summaries: Record<string, { tabId: number; url: string; summary: PageSummaryResult; timestamp: number }> =
+            (result[SUMMARY_STORAGE_KEY] as Record<string, { tabId: number; url: string; summary: PageSummaryResult; timestamp: number }>) || {};
+        summaries[url] = {
+            tabId,
+            url,
+            summary,
+            // 时间戳：记录总结结果的生成时间，可用于判断总结是否过期、清理旧数据等
+            timestamp: Date.now()
+        };
+        await chrome.storage.local.set({ [SUMMARY_STORAGE_KEY]: summaries });
+        log(`[网页总结] 已保存标签页 ${tabId} 的总结结果到 LocalStorage`);
+    } catch (error) {
+        log(`[网页总结] 保存总结结果失败: ${error}`);
+    }
+}
+
+/**
+ * 检查是否已有该 URL 的总结结果
+ */
+async function hasSummary(url: string): Promise<boolean> {
+    try {
+        const result = await chrome.storage.local.get(SUMMARY_STORAGE_KEY);
+        const summaries: Record<string, any> = (result[SUMMARY_STORAGE_KEY] as Record<string, any>) || {};
+        return !!summaries[url];
+    } catch (error) {
+        log(`[网页总结] 检查总结结果失败: ${error}`);
+        return false;
+    }
+}
+
+/**
+ * 对标签页进行网页总结（带防抖）
+ */
+async function summarizeTabWithDebounce(tabId: number, url: string) {
+    // 清除之前的定时器
+    const existingTimer = debounceTimers.get(tabId);
+    if (existingTimer) {
+        clearTimeout(existingTimer);
+    }
+
+    // 检查是否已有总结结果
+    const hasExistingSummary = await hasSummary(url);
+    if (hasExistingSummary) {
+        log(`[网页总结] 标签页 ${tabId} 的 URL ${url} 已有总结结果，跳过`);
+        return;
+    }
+
+    // 设置新的防抖定时器
+    const timer = setTimeout(async () => {
+        debounceTimers.delete(tabId);
+
+        try {
+            // 获取默认 AI 配置
+            const defaultProvider = await getDefaultProvider();
+            if (!defaultProvider) {
+                log(`[网页总结] 没有配置默认AI供应商，跳过总结`);
+                return;
+            }
+
+            const aiConfig: AiConfig = {
+                key: defaultProvider.key,
+                model: defaultProvider.model,
+                baseUrl: defaultProvider.baseUrl,
+                useExactMode: defaultProvider.useExactMode ?? false
+            };
+
+            // 获取标签页 HTML 内容
+            const doc = await getTabHTMLDocWithTimeout(tabId, TAB_HTML_TIMEOUT);
+            if (!doc) {
+                log(`[网页总结] 标签页 ${tabId} 获取 HTML 内容失败，跳过总结`);
+                return;
+            }
+
+            // 创建 AiTabService 实例用于调用总结方法
+            const aiService = new AiTabService([], [], aiConfig);
+
+            // 进行网页总结
+            log(`[网页总结] 开始总结标签页 ${tabId}: ${url}`);
+            const summary = await aiService.summarizePage(tabId, doc);
+
+            if (summary) {
+                // 保存到 LocalStorage
+                await savePageSummary(tabId, url, summary);
+                log(`[网页总结] 标签页 ${tabId} 总结完成`);
+            } else {
+                log(`[网页总结] 标签页 ${tabId} 总结结果为空`);
+            }
+        } catch (error) {
+            log(`[网页总结] 标签页 ${tabId} 总结过程出错: ${error}`);
+        }
+    }, SUMMARY_DEBOUNCE_DELAY);
+
+    debounceTimers.set(tabId, timer);
+    log(`[网页总结] 为标签页 ${tabId} 设置防抖定时器，${SUMMARY_DEBOUNCE_DELAY}ms 后执行`);
+}
+
 // 监听标签页创建事件
-chrome.tabs.onCreated.addListener(function(tab) {    
-    log('新标签页已创建:' + tab);
+chrome.tabs.onCreated.addListener(async function (tab) {
+    log('新标签页已创建:' + tab.id);
+
+    // 如果标签页有 URL，进行总结
+    if (tab.id && tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
+        // 等待一下，确保页面加载
+        setTimeout(() => {
+            if (tab.id && tab.url) {
+                summarizeTabWithDebounce(tab.id, tab.url);
+            }
+        }, 1000);
+    }
 });
 
 // 监听标签页关闭事件
-chrome.tabs.onRemoved.addListener(function(tabId, removeInfo) {    
-    log('标签页已关闭，ID:'+ tabId);
+chrome.tabs.onRemoved.addListener(function (tabId, removeInfo) {
+    log('标签页已关闭，ID:' + tabId);
+
+    // 清除该标签页的防抖定时器
+    const timer = debounceTimers.get(tabId);
+    if (timer) {
+        clearTimeout(timer);
+        debounceTimers.delete(tabId);
+        log(`[网页总结] 已清除标签页 ${tabId} 的防抖定时器`);
+    }
 });
 
 // 监听标签页更新事件
-chrome.tabs.onUpdated.addListener(function(tabId, changeInfo, tab) {    
-    if (changeInfo.url) {        
-        log('标签页URL已更新:' + changeInfo.url);    
+chrome.tabs.onUpdated.addListener(function (tabId, changeInfo, tab) {
+    if (changeInfo.url && tab.url) {
+        log('标签页URL已更新:' + changeInfo.url);
+
+        // 只处理普通 HTTP/HTTPS 页面
+        if (!tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
+            // 使用防抖机制，避免重定向时频繁调用
+            summarizeTabWithDebounce(tabId, tab.url);
+        }
     }
 });

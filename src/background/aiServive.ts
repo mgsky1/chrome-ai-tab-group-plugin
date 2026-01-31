@@ -62,6 +62,15 @@ export function log(msg: any) {
     }
 }
 
+/**
+ * 网页总结结果类型
+ */
+export type PageSummaryResult = {
+    summary?: string;  // 精准模式下的全文总结
+    headText?: string; // 普通模式下的首段摘要
+    bodyText?: string; // 普通模式下的中间摘要
+};
+
 export default class AiTabService {
     private ungroupTabInfos: TabInfo[];
     private existGroup: GroupInfo[];
@@ -162,6 +171,96 @@ export default class AiTabService {
             }
         );
         return chat;
+    }
+
+    /**
+     * 对单个标签页进行网页总结
+     * @param tabId 标签页ID
+     * @param doc 网页Document对象
+     * @returns 总结结果
+     */
+    public async summarizePage(
+        tabId: number,
+        doc: Document
+    ): Promise<PageSummaryResult | null> {
+        try {
+            // 跳过 chrome:// 和 chrome-extension:// 页面
+            const tab = await chrome.tabs.get(tabId);
+            if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://')) {
+                log(`[网页总结] 跳过标签页 ${tabId}: ${tab.url}`);
+                return null;
+            }
+
+            log(`[网页总结] 开始总结标签页 ${tabId}: ${tab.title}`);
+
+            if (this.aiConfig.useExactMode) {
+                log(`[网页总结] 使用精准模式，总结全文`);
+                try {
+                    const reader = new Readability(doc);
+                    const article = reader.parse();
+                    const chunkContent = await splitter.createDocuments([article?.textContent ?? '']);
+                    const chain = loadSummarizationChain(this.getLLMInstance(), {
+                        type: 'map_reduce',
+                        verbose: DEBUG,
+                    });
+                    const response = await chain.invoke({
+                        input_documents: chunkContent,
+                    });
+                    log(`[网页总结] 标签页 ${tabId} 总结完成`);
+                    return {
+                        summary: response.text
+                    };
+                } catch (error) {
+                    log(`[网页总结] 标签页 ${tabId} 网页总结失败: ${error}`);
+                    return null;
+                }
+            } else {
+                log(`[网页总结] 使用普通模式，利用部分段落`);
+                try {
+                    const body = doc.body;
+                    const removeTags = ['img', 'script', 'style', 'iframe', 'meta'];
+                    removeTags.forEach(tag => {
+                        const elements = body.querySelectorAll(tag);
+                        elements.forEach(el => el.remove());
+                    });
+                    const splitResult: string[] = await splitter.splitText((body.textContent || '').trim().replace(/\s+/g, ' '));
+                    log(`[网页总结] 标签页 ${tabId} 分割结果数量: ${splitResult.length}`);
+
+                    if (splitResult.length == 0) {
+                        return null;
+                    }
+
+                    let headText: string;
+                    let bodyText: string;
+
+                    if (splitResult.length == 1) {
+                        headText = splitResult[0] ?? '';
+                        bodyText = splitResult[0] ?? '';
+                    } else if (splitResult.length == 2) {
+                        headText = splitResult[0] ?? '';
+                        bodyText = splitResult[1] ?? '';
+                    } else {
+                        // 当分割结果大于2时，取第一段作为首段，取中间段作为中间摘要
+                        const mid = Math.floor(splitResult.length / 2);
+                        const extractMidText = (splitResult[mid - 1] ?? '') + (splitResult[mid] ?? '') + (splitResult[mid + 1] ?? '');
+                        headText = splitResult[0] ?? '';
+                        bodyText = extractMidText;
+                    }
+
+                    log(`[网页总结] 标签页 ${tabId} 总结完成`);
+                    return {
+                        headText,
+                        bodyText
+                    };
+                } catch (error) {
+                    log(`[网页总结] 标签页 ${tabId} 文本分割失败: ${error}`);
+                    return null;
+                }
+            }
+        } catch (error) {
+            log(`[网页总结] 标签页 ${tabId} 总结过程出错: ${error}`);
+            return null;
+        }
     }
 
     private async sendToAi(prompt: string) {
@@ -501,6 +600,25 @@ export default class AiTabService {
         return colors[randomIndex] as chrome.tabGroups.Color;
     }
 
+    /**
+     * 从 LocalStorage 读取网页总结结果
+     */
+    private async loadPageSummaryFromStorage(url: string): Promise<PageSummaryResult | null> {
+        try {
+            const result = await chrome.storage.local.get('pageSummaries');
+            const summaries = (result['pageSummaries'] as Record<string, { summary: PageSummaryResult }>) || {};
+            const summaryData = summaries[url];
+            if (summaryData && summaryData.summary) {
+                log(`[AI分组] 从 LocalStorage 读取到标签页 ${url} 的总结结果`);
+                return summaryData.summary;
+            }
+            return null;
+        } catch (error) {
+            log(`[AI分组] 从 LocalStorage 读取总结结果失败: ${error}`);
+            return null;
+        }
+    }
+
     public async group() {
         log('[AI分组] 开始处理标签页文本处理...');
         await Promise.all(
@@ -512,58 +630,36 @@ export default class AiTabService {
                 }
 
                 log(`[AI分组] 处理标签页 ${tab.id}: ${tab.title}`);
+
+                // 优先从 LocalStorage 读取总结结果
+                const savedSummary = await this.loadPageSummaryFromStorage(tab.url);
+                if (savedSummary) {
+                    // 如果从 LocalStorage 读取到了总结结果，直接使用
+                    if (this.aiConfig.useExactMode) {
+                        tab.summary = savedSummary.summary;
+                    } else {
+                        tab.headText = savedSummary.headText;
+                        tab.bodyText = savedSummary.bodyText;
+                    }
+                    log(`[AI分组] 标签页 ${tab.id} 使用 LocalStorage 中的总结结果`);
+                    return;
+                }
+
+                // 如果没有保存的总结结果，才进行总结
+                log(`[AI分组] 标签页 ${tab.id} 没有保存的总结结果，开始总结...`);
                 if (!tab.doc) {
                     log(`[AI分组] 标签页 ${tab.id} 没有 HTML 内容`);
                     return;
                 }
 
-                if (this.aiConfig.useExactMode) {
-                    log(`[AI分组]使用精准模式，总结全文`)
-                    try {
-                        const reader = new Readability(tab.doc ?? new Document());
-                        const article = reader.parse();
-                        const chunkContent = await splitter.createDocuments([article?.textContent ?? ''])
-                        const chain = loadSummarizationChain(this.getLLMInstance(), {
-                            type: 'map_reduce', // you can choose from map_reduce, stuff or refine
-                            verbose: DEBUG, // to view the steps in the console
-                        });
-                        const response = await chain.invoke({
-                            input_documents: chunkContent,
-                        });
-                        tab.summary = response.text;
-                    } catch (error) {
-                        log(`[AI分组] 标签页 ${tab.id} 网页总结失败: ${error}`);
-                    }
-                } else {
-                    log(`[AI分组]使用普通模式，利用部分段落`)
-                    try {
-                        const body = tab.doc.body;
-                        const removeTags = ['img', 'script', 'style', 'iframe', 'meta'];
-                        removeTags.forEach(tag => {
-                            const elements = body.querySelectorAll(tag);
-                            elements.forEach(el => el.remove());
-                        })
-                        const splitResult: string[] = await splitter.splitText((body.textContent || '').trim().replace(/\s+/g, ' '));
-                        log(`[AI分组] 标签页 ${tab.id} 分割结果数量: ${splitResult.length}`);
-
-                        if (splitResult.length == 0) {
-                            return;
-                        }
-                        if (splitResult.length == 1) {
-                            tab.headText = splitResult[0];
-                            tab.bodyText = splitResult[0];
-                        } else if (splitResult.length == 2) {
-                            tab.headText = splitResult[0];
-                            tab.bodyText = splitResult[1];
-                        } else {
-                            // 当分割结果大于2时，取第一段作为首段，取中间段作为中间摘要
-                            const mid = Math.floor(splitResult.length / 2);
-                            const extractMidText = (splitResult[mid - 1] ?? '') + (splitResult[mid] ?? '') + (splitResult[mid + 1] ?? '');
-                            tab.headText = splitResult[0];
-                            tab.bodyText = extractMidText;
-                        }
-                    } catch (error) {
-                        log(`[AI分组] 标签页 ${tab.id} 文本分割失败: ${error}`);
+                // 使用成员方法进行总结
+                const summary = await this.summarizePage(tab.id!, tab.doc);
+                if (summary) {
+                    if (this.aiConfig.useExactMode) {
+                        tab.summary = summary.summary;
+                    } else {
+                        tab.headText = summary.headText;
+                        tab.bodyText = summary.bodyText;
                     }
                 }
             })
