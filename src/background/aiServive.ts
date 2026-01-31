@@ -4,7 +4,6 @@ import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { Readability } from "@mozilla/readability";
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
-import { loadSummarizationChain } from '@langchain/classic/chains';
 
 const splitter = new RecursiveCharacterTextSplitter({ chunkSize: 2000, chunkOverlap: 0 })
 
@@ -198,17 +197,24 @@ export default class AiTabService {
                 try {
                     const reader = new Readability(doc);
                     const article = reader.parse();
-                    const chunkContent = await splitter.createDocuments([article?.textContent ?? '']);
-                    const chain = loadSummarizationChain(this.getLLMInstance(), {
-                        type: 'map_reduce',
-                        verbose: DEBUG,
-                    });
-                    const response = await chain.invoke({
-                        input_documents: chunkContent,
-                    });
+                    const textContent = article?.textContent ?? '';
+                    
+                    // 使用直接调用方式，避免 map_reduce 的多重 API 调用
+                    // 如果内容太长，截取前 8000 字符（可根据模型 token 限制调整）
+                    const maxLength = 8000;
+                    const contentToSummarize = textContent.length > maxLength 
+                        ? textContent.substring(0, maxLength) + '...'
+                        : textContent;
+                    
+                    const prompt = `请总结以下网页内容，要求简洁明了，突出核心要点：\n\n${contentToSummarize}`;
+                    const response = await this.getLLMInstance().invoke([
+                        new SystemMessage("你是一个专业的网页内容总结助手。你需要提取网页的核心信息，生成简洁的摘要。"),
+                        new HumanMessage(prompt)
+                    ]);
+                    
                     log(`[网页总结] 标签页 ${tabId} 总结完成`);
                     return {
-                        summary: response.text
+                        summary: response.content as string
                     };
                 } catch (error) {
                     log(`[网页总结] 标签页 ${tabId} 网页总结失败: ${error}`);
@@ -645,23 +651,10 @@ export default class AiTabService {
                     return;
                 }
 
-                // 如果没有保存的总结结果，才进行总结
-                log(`[AI分组] 标签页 ${tab.id} 没有保存的总结结果，开始总结...`);
-                if (!tab.doc) {
-                    log(`[AI分组] 标签页 ${tab.id} 没有 HTML 内容`);
-                    return;
-                }
-
-                // 使用成员方法进行总结
-                const summary = await this.summarizePage(tab.id!, tab.doc);
-                if (summary) {
-                    if (this.aiConfig.useExactMode) {
-                        tab.summary = summary.summary;
-                    } else {
-                        tab.headText = summary.headText;
-                        tab.bodyText = summary.bodyText;
-                    }
-                }
+                // 如果没有保存的总结结果，跳过该标签页（不进行新的总结）
+                // 因为用户点击分组时，如果选择"使用已有结果继续"，应该只处理有总结结果的标签页
+                log(`[AI分组] 标签页 ${tab.id} 没有保存的总结结果，跳过（不进行分组）`);
+                return;
             })
         );
 

@@ -137,7 +137,7 @@ async function getTabsInGroup(groupId: number) {
     }));
 }
 
-async function groupTabs() {
+async function groupTabs(waitForSummary: boolean = false) {
     log('[AI分组] ========== 开始分组流程 ==========');
     try {
         // 首先检查是否有可用的供应商类型
@@ -168,6 +168,28 @@ async function groupTabs() {
         }
         log('[AI分组] 未分组标签页标题:' + ungroupedTabs.map(t => t.title));
 
+        // 检查总结状态
+        const status = checkTabSummaryStatus(ungroupedTabs);
+        log(`[AI分组] 总结状态: 已完成 ${status.completed.length}, 处理中 ${status.processing.length}, 待处理 ${status.pending.length}, 无总结 ${status.noSummary.length}`);
+
+        // 如果需要等待总结完成，且有正在处理或待处理的标签页
+        if (waitForSummary && (status.processing.length > 0 || status.pending.length > 0)) {
+            log('[AI分组] 等待总结完成...');
+            // 等待所有总结完成（最多等待 60 秒）
+            const maxWaitTime = 60000;
+            const startTime = Date.now();
+            while ((status.processing.length > 0 || status.pending.length > 0) && (Date.now() - startTime) < maxWaitTime) {
+                await new Promise(resolve => setTimeout(resolve, 1000)); // 等待 1 秒
+                const newStatus = checkTabSummaryStatus(ungroupedTabs);
+                status.processing = newStatus.processing;
+                status.pending = newStatus.pending;
+                log(`[AI分组] 等待中... 处理中: ${status.processing.length}, 待处理: ${status.pending.length}`);
+            }
+            if (status.processing.length > 0 || status.pending.length > 0) {
+                log('[AI分组] ⚠️ 等待超时，部分标签页总结未完成');
+            }
+        }
+
         // 获取已存在的分组
         log('[AI分组] 步骤3: 获取已存在的分组...');
         const existingGroups = await getExistingGroups();
@@ -195,10 +217,12 @@ async function groupTabs() {
 
 // 监听来自popup的消息
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    log('[AI分组] 收到消息');
+    log('[AI分组] 收到消息: ' + request.action);
+
     if (request.action === 'groupTabs') {
         log('[AI分组] 从popup触发分组...');
-        groupTabs().then(res => {
+        const waitForSummary = request.waitForSummary || false;
+        groupTabs(waitForSummary).then(res => {
             log('[AI分组] popup触发分组成功');
             sendResponse({ success: true });
         }).catch(err => {
@@ -207,6 +231,51 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         })
         return true;
     }
+
+    if (request.action === 'getSummaryProgress') {
+        const progress = getSummaryProgress();
+        sendResponse({ success: true, progress });
+        return true;
+    }
+
+    if (request.action === 'checkSummaryStatus') {
+        // 快速获取未分组标签页（不需要获取 HTML 内容）
+        (async () => {
+            try {
+                // 只获取标签页基本信息，不获取 HTML 内容，提高响应速度
+                const windows = await chrome.windows.getAll({ windowTypes: ['normal'] });
+                const windowIds = windows.map(w => w.id).filter((id): id is number => id !== undefined);
+                const tabs = await chrome.tabs.query({});
+                const normalTabs = tabs.filter(tab => windowIds.includes(tab.windowId));
+                const ungroupedTabs = normalTabs.filter(tab => tab.groupId === chrome.tabGroups.TAB_GROUP_ID_NONE);
+
+                // 转换为 TabInfo 格式（只需要 URL）
+                const tabInfos: TabInfo[] = ungroupedTabs.map(tab => ({
+                    id: tab.id,
+                    title: tab.title,
+                    url: tab.url,
+                    groupId: tab.groupId,
+                    windowId: tab.windowId
+                }));
+
+                const status = checkTabSummaryStatus(tabInfos);
+                sendResponse({
+                    success: true,
+                    status: {
+                        completed: status.completed.length,
+                        processing: status.processing.length,
+                        pending: status.pending.length,
+                        noSummary: status.noSummary.length,
+                        total: ungroupedTabs.length
+                    }
+                });
+            } catch (err: any) {
+                sendResponse({ success: false, error: err.message });
+            }
+        })();
+        return true;
+    }
+
     return true;
 });
 
@@ -266,6 +335,104 @@ chrome.runtime.onInstalled.addListener(() => {
 // 防抖定时器映射：tabId -> timeoutId
 const debounceTimers: Map<number, NodeJS.Timeout> = new Map();
 
+// 总结进度状态类型
+type SummaryStatus = 'pending' | 'processing' | 'completed' | 'failed';
+
+// 总结进度跟踪：url -> 状态
+const summaryProgress: Map<string, { status: SummaryStatus; progress?: number; tabId?: number }> = new Map();
+
+/**
+ * 总结任务队列管理器
+ * 限制同时进行的总结请求数量，避免触发 API 限流
+ */
+class SummaryQueue {
+    private queue: Array<{ task: () => Promise<void>; url: string; tabId: number }> = [];
+    private running: number = 0;
+    private maxConcurrent: number = 3;
+
+    /**
+     * 添加总结任务到队列
+     */
+    async add(task: () => Promise<void>, url: string, tabId: number): Promise<void> {
+        return new Promise((resolve, reject) => {
+            this.queue.push({
+                task: async () => {
+                    try {
+                        await task();
+                        resolve();
+                    } catch (error) {
+                        reject(error);
+                    }
+                },
+                url,
+                tabId
+            });
+            this.processQueue();
+        });
+    }
+
+    /**
+     * 处理队列中的任务
+     */
+    private async processQueue(): Promise<void> {
+        // 如果已达到最大并发数或队列为空，直接返回
+        if (this.running >= this.maxConcurrent || this.queue.length === 0) {
+            return;
+        }
+
+        // 从队列中取出一个任务
+        const item = this.queue.shift();
+        if (!item) {
+            return;
+        }
+
+        this.running++;
+
+        // 更新状态为 processing
+        summaryProgress.set(item.url, {
+            status: 'processing',
+            tabId: item.tabId
+        });
+
+        try {
+            await item.task();
+            // 任务完成后，更新状态为 completed
+            summaryProgress.set(item.url, {
+                status: 'completed',
+                tabId: item.tabId
+            });
+            // 发送进度更新消息
+            notifyProgressUpdate();
+        } catch (error) {
+            // 任务失败，更新状态为 failed
+            summaryProgress.set(item.url, {
+                status: 'failed',
+                tabId: item.tabId
+            });
+            log(`[总结队列] 任务失败: ${item.url}, ${error}`);
+            // 发送进度更新消息
+            notifyProgressUpdate();
+        } finally {
+            this.running--;
+            // 继续处理队列中的下一个任务
+            this.processQueue();
+        }
+    }
+
+    /**
+     * 获取队列状态
+     */
+    getStatus(): { queueLength: number; running: number } {
+        return {
+            queueLength: this.queue.length,
+            running: this.running
+        };
+    }
+}
+
+// 创建全局总结队列实例
+const summaryQueue = new SummaryQueue();
+
 /**
  * 保存网页总结结果到 LocalStorage
  */
@@ -303,6 +470,80 @@ async function hasSummary(url: string): Promise<boolean> {
 }
 
 /**
+ * 获取总结进度信息
+ */
+function getSummaryProgress(): { total: number; completed: number; processing: number; pending: number; failed: number; progress: number } {
+    let total = 0;
+    let completed = 0;
+    let processing = 0;
+    let pending = 0;
+    let failed = 0;
+
+    summaryProgress.forEach((status) => {
+        total++;
+        if (status.status === 'completed') completed++;
+        else if (status.status === 'processing') processing++;
+        else if (status.status === 'pending') pending++;
+        else if (status.status === 'failed') failed++;
+    });
+
+    const progress = total > 0 ? Math.round((completed / total) * 100) : 100;
+
+    return { total, completed, processing, pending, failed, progress };
+}
+
+/**
+ * 通知进度更新（发送消息给所有监听者）
+ */
+function notifyProgressUpdate() {
+    const progress = getSummaryProgress();
+    // 尝试发送消息给 popup（如果打开的话）
+    // 注意：Chrome extension 无法直接发送消息给 popup，需要 popup 主动监听
+    // 这里我们只是记录日志，实际更新由 popup 轮询实现
+    log(`[进度更新] 已完成: ${progress.completed}/${progress.total}, 处理中: ${progress.processing}, 待处理: ${progress.pending}`);
+}
+
+/**
+ * 检查标签页的总结状态
+ */
+function checkTabSummaryStatus(tabs: TabInfo[]): {
+    completed: TabInfo[];
+    processing: TabInfo[];
+    pending: TabInfo[];
+    noSummary: TabInfo[]
+} {
+    const completed: TabInfo[] = [];
+    const processing: TabInfo[] = [];
+    const pending: TabInfo[] = [];
+    const noSummary: TabInfo[] = [];
+
+    tabs.forEach(tab => {
+        if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://')) {
+            return;
+        }
+
+        const status = summaryProgress.get(tab.url);
+        if (status) {
+            if (status.status === 'completed') {
+                completed.push(tab);
+            } else if (status.status === 'processing') {
+                processing.push(tab);
+            } else if (status.status === 'pending') {
+                pending.push(tab);
+            } else {
+                noSummary.push(tab);
+            }
+        } else {
+            // 检查 LocalStorage 中是否有总结结果
+            // 这里先假设没有，实际会在 group() 方法中检查
+            noSummary.push(tab);
+        }
+    });
+
+    return { completed, processing, pending, noSummary };
+}
+
+/**
  * 对标签页进行网页总结（带防抖）
  */
 async function summarizeTabWithDebounce(tabId: number, url: string) {
@@ -316,6 +557,14 @@ async function summarizeTabWithDebounce(tabId: number, url: string) {
     const hasExistingSummary = await hasSummary(url);
     if (hasExistingSummary) {
         log(`[网页总结] 标签页 ${tabId} 的 URL ${url} 已有总结结果，跳过`);
+        summaryProgress.set(url, { status: 'completed', tabId });
+        return;
+    }
+
+    // 检查是否已经在处理中
+    const existingStatus = summaryProgress.get(url);
+    if (existingStatus?.status === 'processing') {
+        log(`[网页总结] 标签页 ${tabId} 的 URL ${url} 正在处理中，跳过`);
         return;
     }
 
@@ -323,45 +572,66 @@ async function summarizeTabWithDebounce(tabId: number, url: string) {
     const timer = setTimeout(async () => {
         debounceTimers.delete(tabId);
 
-        try {
-            // 获取默认 AI 配置
-            const defaultProvider = await getDefaultProvider();
-            if (!defaultProvider) {
-                log(`[网页总结] 没有配置默认AI供应商，跳过总结`);
-                return;
-            }
-
-            const aiConfig: AiConfig = {
-                key: defaultProvider.key,
-                model: defaultProvider.model,
-                baseUrl: defaultProvider.baseUrl,
-                useExactMode: defaultProvider.useExactMode ?? false
-            };
-
-            // 获取标签页 HTML 内容
-            const doc = await getTabHTMLDocWithTimeout(tabId, TAB_HTML_TIMEOUT);
-            if (!doc) {
-                log(`[网页总结] 标签页 ${tabId} 获取 HTML 内容失败，跳过总结`);
-                return;
-            }
-
-            // 创建 AiTabService 实例用于调用总结方法
-            const aiService = new AiTabService([], [], aiConfig);
-
-            // 进行网页总结
-            log(`[网页总结] 开始总结标签页 ${tabId}: ${url}`);
-            const summary = await aiService.summarizePage(tabId, doc);
-
-            if (summary) {
-                // 保存到 LocalStorage
-                await savePageSummary(tabId, url, summary);
-                log(`[网页总结] 标签页 ${tabId} 总结完成`);
-            } else {
-                log(`[网页总结] 标签页 ${tabId} 总结结果为空`);
-            }
-        } catch (error) {
-            log(`[网页总结] 标签页 ${tabId} 总结过程出错: ${error}`);
+        // 再次检查是否已有总结结果（可能在防抖期间已完成）
+        const hasSummaryNow = await hasSummary(url);
+        if (hasSummaryNow) {
+            log(`[网页总结] 标签页 ${tabId} 的 URL ${url} 在防抖期间已完成总结，跳过`);
+            summaryProgress.set(url, { status: 'completed', tabId });
+            return;
         }
+
+        // 标记为 pending
+        summaryProgress.set(url, { status: 'pending', tabId });
+
+        // 将任务添加到队列
+        await summaryQueue.add(async () => {
+            try {
+                // 获取默认 AI 配置
+                const defaultProvider = await getDefaultProvider();
+                if (!defaultProvider) {
+                    log(`[网页总结] 没有配置默认AI供应商，跳过总结`);
+                    summaryProgress.set(url, { status: 'failed', tabId });
+                    return;
+                }
+
+                const aiConfig: AiConfig = {
+                    key: defaultProvider.key,
+                    model: defaultProvider.model,
+                    baseUrl: defaultProvider.baseUrl,
+                    useExactMode: defaultProvider.useExactMode ?? false
+                };
+
+                // 获取标签页 HTML 内容
+                const doc = await getTabHTMLDocWithTimeout(tabId, TAB_HTML_TIMEOUT);
+                if (!doc) {
+                    log(`[网页总结] 标签页 ${tabId} 获取 HTML 内容失败，跳过总结`);
+                    summaryProgress.set(url, { status: 'failed', tabId });
+                    return;
+                }
+
+                // 创建 AiTabService 实例用于调用总结方法
+                const aiService = new AiTabService([], [], aiConfig);
+
+                // 进行网页总结
+                log(`[网页总结] 开始总结标签页 ${tabId}: ${url}`);
+                const summary = await aiService.summarizePage(tabId, doc);
+
+                if (summary) {
+                    // 保存到 LocalStorage
+                    await savePageSummary(tabId, url, summary);
+                    log(`[网页总结] 标签页 ${tabId} 总结完成`);
+                } else {
+                    log(`[网页总结] 标签页 ${tabId} 总结结果为空`);
+                    summaryProgress.set(url, { status: 'failed', tabId });
+                }
+            } catch (error) {
+                log(`[网页总结] 标签页 ${tabId} 总结过程出错: ${error}`);
+                summaryProgress.set(url, { status: 'failed', tabId });
+                throw error;
+            }
+        }, url, tabId);
+
+        log(`[网页总结] 标签页 ${tabId} 的任务已加入队列`);
     }, SUMMARY_DEBOUNCE_DELAY);
 
     debounceTimers.set(tabId, timer);
