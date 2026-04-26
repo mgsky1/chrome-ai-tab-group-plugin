@@ -11,14 +11,16 @@
 - **精准模式**（`useExactMode: true`）：使用 Mozilla Readability + LangChain map_reduce 生成完整摘要
 - **普通模式**（`useExactMode: false`）：提取页面首段和中间段文本片段
 
-两种模式共存增加了代码复杂度，且精准模式依赖重量级的 LangChain summarization chain。本次改造统一为单一流程，引入 TextRank 关键词提取替代摘要策略。
+两种模式共存增加了代码复杂度，且精准模式依赖重量级的 LangChain summarization chain。本次改造统一为单一流程，引入 segmentit 中文分词 + TextRank 关键词提取替代摘要策略。
+
+关键词提取在**用户点击分组按钮时**触发，不做预加载，避免不必要的计算和 API 消耗。
 
 ---
 
 ## 目标
 
 1. 删除精准分类模式的所有功能
-2. 使用 TextRank 算法从页面纯文本中提取 3-5 个关键词
+2. 使用 `segmentit`（中文分词）+ TextRank 算法从页面纯文本中提取 3-5 个关键词，支持自定义词库
 3. 调用 LLM 分组时传递网页标题和关键词
 
 ---
@@ -28,17 +30,19 @@
 ### 统一数据流
 
 ```
-Tab HTML
+用户点击分组按钮
   ↓
-[background.ts] chrome.scripting.executeScript() 获取 HTML
+[background.ts] chrome.scripting.executeScript() 获取各 tab 的 HTML
   ↓
 linkedom.parseHTML() 解析为 Document
   ↓
 [aiServive.ts] stripHtml(doc) → 纯文本
   ↓
-[aiServive.ts] extractKeywords(text) → string[] (3-5 个关键词，TextRank)
+[aiServive.ts] extractKeywords(text) → string[] (3-5 个关键词)
+  分词：segmentit（支持自定义词库）
+  打分：TextRank（基于词共现图 + PageRank）
   ↓
-[aiServive.ts] sendToAi({title, keywords}) → LLM 分组
+[aiServive.ts] sendToAi({tabs: [{title, keywords}]}) → LLM 分组
   ↓
 LLM 返回 JSON → Chrome tab groups
 ```
@@ -82,9 +86,11 @@ interface TabInfo {
 
 **新增：**
 - `extractKeywords(text: string): string[]` 函数
-  - 使用 `textrank` npm 包（纯 JS 实现，兼容 Chrome service worker）
-  - 返回 3-5 个关键词
-- 更新 `summarizePage()` 方法：统一走 HTML 剥离 → TextRank 提取关键词流程
+  - 使用 `segmentit` 进行中文分词，支持通过 `segment.use()` 注入自定义词典模块
+  - 基于分词结果构建词共现图，用 TextRank（PageRank 变体）打分
+  - 过滤停用词（的、了、是、在等高频无意义词）
+  - 返回得分最高的 3-5 个关键词
+  - 若可提取词不足 3 个，返回实际数量
 
 **修改 LLM Prompt：**
 
@@ -117,31 +123,34 @@ Tab 数据格式（新）：
 
 ### 4. `background.ts`
 
-无需改动精准模式相关内容（不感知模式，只调用 aiServive）。
+- 移除预加载 summarize 队列中与精准模式相关的逻辑
+- 关键词提取改为在分组触发时同步执行（不再预缓存）
 
 ---
 
 ## 依赖变更
 
 **新增：**
-- `textrank`（纯 JS TextRank 实现，兼容 Chrome service worker）
+- `segmentit`（纯 JS 中文分词，支持自定义词库，兼容 Chrome service worker）
 
 **可移除（确认无其他使用后）：**
 - `@mozilla/readability`
-- `@langchain/textsplitters`（如无其他使用）
+- `@langchain/textsplitters`
 
 ---
 
 ## 关键词提取规格
 
 - 输入：页面 body 纯文本（已剥离所有 HTML 标签，空白已规范化）
-- 算法：TextRank
-- 输出：3-5 个关键词字符串数组
-- 若文本过短（关键词不足 3 个），返回实际可提取数量，不补充
+- 分词：`segmentit`，可通过词典模块扩展专有名词
+- 算法：TextRank（词共现窗口大小：2，迭代次数：10，阻尼系数：0.85）
+- 输出：3-5 个关键词字符串数组，按 TextRank 得分降序排列
+- 若文本过短（关键词不足 3 个），返回实际可提取数量
 
 ---
 
 ## 错误处理
 
-- TextRank 提取失败：返回空数组 `[]`，LLM 仍可根据标题分组
+- 关键词提取失败：返回空数组 `[]`，LLM 仍可根据标题分组
 - HTML 剥离后文本为空：关键词为空数组，仅凭标题分组
+- segmentit 初始化失败：降级为按空格/标点简单切词
