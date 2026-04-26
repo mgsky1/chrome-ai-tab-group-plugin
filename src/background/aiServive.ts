@@ -181,79 +181,46 @@ export default class AiTabService {
         this.aiConfig = aiConfig;
     }
 
-    private buildNormalPrompt() {
-        let prompt = "请根据以下网页标题和网页摘要(首段摘要和页面中间摘要)对标签页进行智能分组。相同类型或主题的网页应该归为一组。\n";
-        prompt += "待分组的标签页标题与摘要列表（索引从0开始）：\n";
-        prompt += this.ungroupTabInfos.map((tab, index) => `${index}: 标题:${tab.title}; 摘要: 【首段摘要如下】=>${tab.headText} 【页面中间摘要如下】=>${tab.bodyText}`).join('\n\n');
+    private buildPrompt() {
+        let prompt = "请根据以下网页标题和关键词对标签页进行智能分组。相同类型或主题的网页应该归为一组。\n";
+        prompt += "待分组的标签页列表（索引从0开始）：\n";
+        prompt += this.ungroupTabInfos.map((tab, index) => {
+            const keywordsStr = (tab.keywords && tab.keywords.length > 0)
+                ? tab.keywords.join(', ')
+                : '无';
+            return `${index}: 标题:${tab.title}; 关键词: [${keywordsStr}]`;
+        }).join('\n\n');
         if (this.existGroup.length > 0) {
-            prompt += "已存在的分组（如果新标签页属于某个已有分组，请将其归入该分组）：\n";
+            prompt += "\n已存在的分组（如果新标签页属于某个已有分组，请将其归入该分组）：\n";
             this.existGroup.forEach(g => {
                 prompt += "分组" + g.title + "包含的标签页:\n";
                 g.tabDetails?.forEach(t => {
                     prompt += "- " + t.title + "\n";
-                })
+                });
                 prompt += "\n";
-            })
+            });
         }
         prompt += `请返回JSON格式的结果，格式如下：
-        {
-          "newGroups": {
-            "分组名称1": [标签索引1, 标签索引2, ...],
-            "分组名称2": [标签索引3, 标签索引4, ...]
-          },
-          "existingGroups": {
-            "已有分组名称": [标签索引1, 标签索引2, ...]
-          }
-        }
-        
-        规则：
-        1. 如果标签页可以归入已有分组，请将其放在"existingGroups"中对应的分组下
-        2. 如果标签页无法归入已有分组，请创建新分组，放在"newGroups"中
-        3. 分组名称应该简洁明了，能够概括该组标签的主题（2-6个中文字符）
-        4. 每个分组至少包含1个标签页
-        5. 所有待分组的标签页都必须被分配到一个分组中
-        6. 只返回JSON，不要包含其他文字说明
-        7. 只需要关注待分组的标签页
-        
-        请开始分析并返回JSON结果：`;
-        return prompt;
+    {
+      "newGroups": {
+        "分组名称1": [标签索引1, 标签索引2, ...],
+        "分组名称2": [标签索引3, 标签索引4, ...]
+      },
+      "existingGroups": {
+        "已有分组名称": [标签索引1, 标签索引2, ...]
+      }
     }
 
-    private buildExactPrompt() {
-        let prompt = "请根据以下网页标题和网页摘要(首段摘要和页面中间摘要)对标签页进行智能分组。相同类型或主题的网页应该归为一组。\n";
-        prompt += "待分组的标签页标题与摘要列表（索引从0开始）：\n";
-        prompt += this.ungroupTabInfos.map((tab, index) => `${index}: 标题:${tab.title}; 摘要: ${tab.summary}`).join('\n\n');
-        if (this.existGroup.length > 0) {
-            prompt += "已存在的分组（如果新标签页属于某个已有分组，请将其归入该分组）：\n";
-            this.existGroup.forEach(g => {
-                prompt += "分组" + g.title + "包含的标签页:\n";
-                g.tabDetails?.forEach(t => {
-                    prompt += "- " + t.title + "\n";
-                })
-                prompt += "\n";
-            })
-        }
-        prompt += `请返回JSON格式的结果，格式如下：
-        {
-          "newGroups": {
-            "分组名称1": [标签索引1, 标签索引2, ...],
-            "分组名称2": [标签索引3, 标签索引4, ...]
-          },
-          "existingGroups": {
-            "已有分组名称": [标签索引1, 标签索引2, ...]
-          }
-        }
-        
-        规则：
-        1. 如果标签页可以归入已有分组，请将其放在"existingGroups"中对应的分组下
-        2. 如果标签页无法归入已有分组，请创建新分组，放在"newGroups"中
-        3. 分组名称应该简洁明了，能够概括该组标签的主题（2-6个中文字符）
-        4. 每个分组至少包含1个标签页
-        5. 所有待分组的标签页都必须被分配到一个分组中
-        6. 只返回JSON，不要包含其他文字说明
-        7. 只需要关注待分组的标签页
-        
-        请开始分析并返回JSON结果：`;
+    规则：
+    1. 如果标签页可以归入已有分组，请将其放在"existingGroups"中对应的分组下
+    2. 如果标签页无法归入已有分组，请创建新分组，放在"newGroups"中
+    3. 分组名称应该简洁明了，能够概括该组标签的主题（2-6个中文字符）
+    4. 每个分组至少包含1个标签页
+    5. 所有待分组的标签页都必须被分配到一个分组中
+    6. 只返回JSON，不要包含其他文字说明
+    7. 只需要关注待分组的标签页
+
+    请开始分析并返回JSON结果：`;
         return prompt;
     }
 
@@ -319,10 +286,10 @@ export default class AiTabService {
 
     private async sendToAi(prompt: string) {
         const response = await this.getLLMInstance().invoke([
-            new SystemMessage("你是一个专业的网页标签分类助手。你需要根据网页标题对标签页进行智能分组。"),
+            new SystemMessage("你是一个专业的网页标签分类助手。你需要根据网页标题和关键词对标签页进行智能分组。"),
             new HumanMessage(prompt)
-        ])
-        return response.content
+        ]);
+        return response.content;
     }
 
     private parseContent(content: any) {
@@ -672,11 +639,21 @@ export default class AiTabService {
         }
     }
 
-    public async group() {
-        log('[AI分组] 开始处理标签页文本处理...');
+    private async savePageSummaryToStorage(url: string, summary: PageSummaryResult): Promise<void> {
+        try {
+            const result = await chrome.storage.local.get(SUMMARY_STORAGE_KEY);
+            const summaries = (result[SUMMARY_STORAGE_KEY] as Record<string, { summary: PageSummaryResult }>) || {};
+            summaries[url] = { summary };
+            await chrome.storage.local.set({ [SUMMARY_STORAGE_KEY]: summaries });
+        } catch (error) {
+            log(`[AI分组] 保存关键词到缓存失败: ${error}`);
+        }
+    }
+
+    public async group(customWords: string[] = []) {
+        log('[AI分组] 开始处理标签页关键词提取...');
         await Promise.all(
             this.ungroupTabInfos.map(async tab => {
-                // 跳过 chrome:// 和 chrome-extension:// 页面
                 if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://')) {
                     log(`[AI分组] 跳过标签页 ${tab.id}: ${tab.url}`);
                     return;
@@ -684,35 +661,31 @@ export default class AiTabService {
 
                 log(`[AI分组] 处理标签页 ${tab.id}: ${tab.title}`);
 
-                // 优先从 LocalStorage 读取总结结果
+                // 优先从 LocalStorage 读取缓存的关键词
                 const savedSummary = await this.loadPageSummaryFromStorage(tab.url);
                 if (savedSummary) {
-                    // 如果从 LocalStorage 读取到了总结结果，直接使用
-                    if (this.aiConfig.useExactMode) {
-                        tab.summary = savedSummary.summary;
-                    } else {
-                        tab.headText = savedSummary.headText;
-                        tab.bodyText = savedSummary.bodyText;
-                    }
-                    log(`[AI分组] 标签页 ${tab.id} 使用 LocalStorage 中的总结结果`);
+                    tab.keywords = savedSummary.keywords;
+                    log(`[AI分组] 标签页 ${tab.id} 使用缓存关键词: ${tab.keywords?.join(', ')}`);
                     return;
                 }
 
-                // 如果没有保存的总结结果，跳过该标签页（不进行新的总结）
-                // 因为用户点击分组时，如果选择"使用已有结果继续"，应该只处理有总结结果的标签页
-                log(`[AI分组] 标签页 ${tab.id} 没有保存的总结结果，跳过（不进行分组）`);
-                return;
+                // 没有缓存，使用 doc 实时提取
+                if (tab.doc) {
+                    const result = await this.summarizePage(tab.id!, tab.doc, customWords);
+                    if (result) {
+                        tab.keywords = result.keywords;
+                        await this.savePageSummaryToStorage(tab.url, result);
+                        log(`[AI分组] 标签页 ${tab.id} 关键词提取完成: ${tab.keywords?.join(', ')}`);
+                    }
+                } else {
+                    log(`[AI分组] 标签页 ${tab.id} 无 doc，跳过关键词提取`);
+                }
             })
         );
 
-        log('[AI分组] 文本分割完成，开始构建提示词...');
-        let prompt = '';
-        if (this.aiConfig.useExactMode) {
-            prompt = this.buildExactPrompt();
-        } else {
-            prompt = this.buildNormalPrompt();
-        }
-        log(prompt)
+        log('[AI分组] 关键词提取完成，开始构建提示词...');
+        const prompt = this.buildPrompt();
+        log(prompt);
         log('[AI分组] 提示词构建完成，开始调用AI...');
         const response = await this.sendToAi(prompt);
         log('[AI分组] AI响应接收完成，开始解析...');
@@ -720,6 +693,5 @@ export default class AiTabService {
         log('[AI分组] 解析完成，开始执行分组操作...');
         await this.executeGrouping(groupResult);
         log('[AI分组] 分组操作执行完成');
-
     }
 }
