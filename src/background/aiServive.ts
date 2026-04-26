@@ -58,6 +58,118 @@ export type PageSummaryResult = {
     keywords: string[];
 };
 
+// 中文停用词列表
+const STOP_WORDS = new Set([
+    '的', '了', '在', '是', '我', '有', '和', '就', '不', '人', '都', '一', '一个',
+    '上', '也', '很', '到', '说', '要', '去', '你', '会', '着', '没有', '看', '好',
+    '自己', '这', '那', '里', '来', '他', '她', '它', '们', '与', '及', '或', '但',
+    '而', '又', '如', '则', '被', '把', '让', '使', '由', '为', '以', '从', '对',
+    '于', '之', '其', '此', '该', '所', '等', '中', '后', '前', '内', '外', '下',
+    '可', '能', '将', '已', '并', '且', '因', '此', '故', '虽', '然', '若', '即',
+    '这个', '那个', '这些', '那些', '什么', '怎么', '为什么', '如何', '哪些', '哪个',
+    '时候', '现在', '时间', '方面', '问题', '情况', '进行', '通过', '使用', '提供'
+]);
+
+/**
+ * 使用 segmentit 分词 + TextRank 算法提取关键词
+ * @param text 已剥离 HTML 的纯文本
+ * @param customWords 用户自定义词库（专有名词）
+ * @returns 3-5 个关键词
+ */
+export function extractKeywords(text: string, customWords: string[] = []): string[] {
+    try {
+        if (!text || text.trim().length === 0) {
+            return [];
+        }
+
+        // 使用 segmentit 进行中文分词
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { Segment, useDefault } = require('segmentit');
+        const segment = useDefault(new Segment());
+
+        // 注入自定义词库，确保专有名词不被拆分
+        if (customWords.length > 0) {
+            const customDict: Record<string, number> = {};
+            customWords.forEach(word => {
+                if (word.trim()) {
+                    customDict[word.trim()] = 1;
+                }
+            });
+            segment.loadDict(customDict);
+        }
+
+        // 分词
+        const words: string[] = segment.doSegment(text, { simple: true });
+
+        // 过滤停用词和单字词（保留自定义词）
+        const customWordSet = new Set(customWords.map(w => w.trim()));
+        const filteredWords = words.filter((w: string) => {
+            if (customWordSet.has(w)) return true;
+            return w.length > 1 && !STOP_WORDS.has(w) && /[\u4e00-\u9fa5a-zA-Z]/.test(w);
+        });
+
+        if (filteredWords.length === 0) {
+            return [];
+        }
+
+        // TextRank：构建词共现图
+        const windowSize = 2;
+        const wordSet = [...new Set(filteredWords)];
+        const scores: Record<string, number> = {};
+        const edges: Record<string, Set<string>> = {};
+
+        wordSet.forEach(w => {
+            scores[w] = 1.0;
+            edges[w] = new Set();
+        });
+
+        // 构建共现关系
+        for (let i = 0; i < filteredWords.length; i++) {
+            for (let j = i + 1; j <= Math.min(i + windowSize, filteredWords.length - 1); j++) {
+                const w1 = filteredWords[i]!;
+                const w2 = filteredWords[j]!;
+                if (w1 !== w2) {
+                    edges[w1]?.add(w2);
+                    edges[w2]?.add(w1);
+                }
+            }
+        }
+
+        // PageRank 迭代
+        const dampingFactor = 0.85;
+        const iterations = 10;
+
+        for (let iter = 0; iter < iterations; iter++) {
+            const newScores: Record<string, number> = {};
+            wordSet.forEach(w => {
+                let score = 1 - dampingFactor;
+                const neighbors = edges[w];
+                if (neighbors) {
+                    neighbors.forEach(neighbor => {
+                        const neighborEdges = edges[neighbor];
+                        if (neighborEdges && neighborEdges.size > 0) {
+                            score += dampingFactor * (scores[neighbor]! / neighborEdges.size);
+                        }
+                    });
+                }
+                newScores[w] = score;
+            });
+            Object.assign(scores, newScores);
+        }
+
+        // 按分数排序，取前 3-5 个
+        const sorted = wordSet
+            .sort((a, b) => (scores[b] ?? 0) - (scores[a] ?? 0));
+
+        const count = Math.min(5, Math.max(sorted.length, 3));
+        return sorted.slice(0, Math.min(count, sorted.length));
+
+    } catch (error) {
+        log(`[关键词提取] 提取失败: ${error}`);
+        return [];
+    }
+}
+
 export default class AiTabService {
     private ungroupTabInfos: TabInfo[];
     private existGroup: GroupInfo[];
