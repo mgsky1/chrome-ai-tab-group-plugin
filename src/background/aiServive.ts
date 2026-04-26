@@ -2,6 +2,7 @@ const DEBUG = true;
 
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+import { Segment, useDefault } from 'segmentit';
 const SUMMARY_STORAGE_KEY = 'pageSummaries';
 
 export type TabInfo = {
@@ -83,19 +84,15 @@ export function extractKeywords(text: string, customWords: string[] = []): strin
         }
 
         // 使用 segmentit 进行中文分词
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const { Segment, useDefault } = require('segmentit');
         const segment = useDefault(new Segment());
 
         // 注入自定义词库，确保专有名词不被拆分
         if (customWords.length > 0) {
-            const customDict: Record<string, number> = {};
-            customWords.forEach(word => {
-                if (word.trim()) {
-                    customDict[word.trim()] = 1;
-                }
-            });
-            segment.loadDict(customDict);
+            const dictStr = customWords
+                .filter(w => w.trim())
+                .map(w => `${w.trim()}|1000|1`)
+                .join('\n');
+            segment.loadDict(dictStr);
         }
 
         // 分词
@@ -161,8 +158,7 @@ export function extractKeywords(text: string, customWords: string[] = []): strin
         const sorted = wordSet
             .sort((a, b) => (scores[b] ?? 0) - (scores[a] ?? 0));
 
-        const count = Math.min(5, Math.max(sorted.length, 3));
-        return sorted.slice(0, Math.min(count, sorted.length));
+        return sorted.slice(0, Math.min(5, sorted.length));
 
     } catch (error) {
         log(`[关键词提取] 提取失败: ${error}`);
@@ -260,8 +256,8 @@ export default class AiTabService {
 
             log(`[关键词提取] 开始提取标签页 ${tabId}: ${tab.title}`);
 
-            // 剥离 HTML，提取纯文本
-            const body = doc.body;
+            // 剥离 HTML，提取纯文本（克隆 body 避免修改原始 Document）
+            const body = doc.body.cloneNode(true) as HTMLElement;
             const removeTags = ['img', 'script', 'style', 'iframe', 'meta'];
             removeTags.forEach(tag => {
                 const elements = body.querySelectorAll(tag);
@@ -292,7 +288,10 @@ export default class AiTabService {
         return response.content;
     }
 
-    private parseContent(content: any) {
+    private parseContent(content: unknown) {
+        if (typeof content !== 'string') {
+            throw new Error(`解析AI响应失败: 响应内容不是字符串类型 (${typeof content})`);
+        }
         let jsonStr = content.trim();
         // 移除可能的markdown代码块标记
         if (jsonStr.startsWith('```')) {

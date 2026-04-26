@@ -202,7 +202,6 @@ async function groupTabs(waitForSummary: boolean = false) {
             key: defaultProvider.key,
             model: defaultProvider.model,
             baseUrl: defaultProvider.baseUrl,
-            useExactMode: defaultProvider.useExactMode ?? false
         };
 
         log('[AI分组] 使用供应商: ' + defaultProvider.name + ', 模型: ' + defaultProvider.model);
@@ -335,6 +334,9 @@ chrome.runtime.onInstalled.addListener(() => {
 // 防抖定时器映射：tabId -> timeoutId
 const debounceTimers: Map<number, NodeJS.Timeout> = new Map();
 
+// 标签页URL映射：tabId -> url，用于在标签页关闭时获取URL信息
+const tabUrlMap: Map<number, string> = new Map();
+
 // 总结进度状态类型
 type SummaryStatus = 'pending' | 'processing' | 'completed' | 'failed';
 
@@ -455,6 +457,61 @@ async function savePageSummary(tabId: number, url: string, summary: PageSummaryR
     }
 }
 
+
+/**
+ * 检查指定URL是否还被其他标签页使用
+ */
+async function isUrlStillInUse(url: string): Promise<boolean> {
+    try {
+        // 获取所有标签页
+        const tabs = await chrome.tabs.query({});
+        
+        // 检查是否有其他标签页使用相同的URL
+        const tabsWithSameUrl = tabs.filter(tab => 
+            tab.url === url && 
+            !tab.url.startsWith('chrome://') && 
+            !tab.url.startsWith('chrome-extension://')
+        );
+        
+        const isInUse = tabsWithSameUrl.length > 0;
+        log(`[缓存管理] URL ${url} 仍被 ${tabsWithSameUrl.length} 个标签页使用`);
+        return isInUse;
+    } catch (error) {
+        log(`[缓存管理] 检查URL使用状态失败: ${error}`);
+        // 出错时保守处理，不删除缓存
+        return true;
+    }
+}
+
+/**
+ * 从缓存中移除指定URL的总结结果
+ */
+async function removeSummaryFromCache(url: string): Promise<void> {
+    try {
+        // 获取当前的总结缓存
+        const result = await chrome.storage.local.get(SUMMARY_STORAGE_KEY);
+        const summaries: Record<string, any> = (result[SUMMARY_STORAGE_KEY] as Record<string, any>) || {};
+        
+        // 检查是否存在该URL的总结
+        if (summaries[url]) {
+            // 从缓存中删除
+            delete summaries[url];
+            
+            // 保存更新后的缓存
+            await chrome.storage.local.set({ [SUMMARY_STORAGE_KEY]: summaries });
+            
+            // 清理进度跟踪中的相关记录
+            summaryProgress.delete(url);
+            
+            log(`[缓存管理] 已从缓存中移除URL ${url} 的总结结果`);
+        } else {
+            log(`[缓存管理] URL ${url} 在缓存中不存在，无需移除`);
+        }
+    } catch (error) {
+        log(`[缓存管理] 移除缓存失败: ${error}`);
+    }
+}
+
 /**
  * 检查是否已有该 URL 的总结结果
  */
@@ -546,7 +603,7 @@ function checkTabSummaryStatus(tabs: TabInfo[]): {
 /**
  * 对标签页进行网页总结（带防抖）
  */
-async function summarizeTabWithDebounce(tabId: number, url: string) {
+async function summarizeTabWithDebounce(tabId: number, url: string, forceRefresh: boolean = false) {
     // 清除之前的定时器
     const existingTimer = debounceTimers.get(tabId);
     if (existingTimer) {
@@ -598,7 +655,6 @@ async function summarizeTabWithDebounce(tabId: number, url: string) {
                     key: defaultProvider.key,
                     model: defaultProvider.model,
                     baseUrl: defaultProvider.baseUrl,
-                    useExactMode: defaultProvider.useExactMode ?? false
                 };
 
                 // 获取标签页 HTML 内容
@@ -642,6 +698,12 @@ async function summarizeTabWithDebounce(tabId: number, url: string) {
 chrome.tabs.onCreated.addListener(async function (tab) {
     log('新标签页已创建:' + tab.id);
 
+    // 记录标签页URL映射
+    if (tab.id && tab.url) {
+        tabUrlMap.set(tab.id, tab.url);
+        log(`[缓存管理] 记录标签页 ${tab.id} 的URL: ${tab.url}`);
+    }
+
     // 如果标签页有 URL，进行总结
     if (tab.id && tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
         // 等待一下，确保页面加载
@@ -654,7 +716,7 @@ chrome.tabs.onCreated.addListener(async function (tab) {
 });
 
 // 监听标签页关闭事件
-chrome.tabs.onRemoved.addListener(function (tabId, removeInfo) {
+chrome.tabs.onRemoved.addListener(async function (tabId, removeInfo) {
     log('标签页已关闭，ID:' + tabId);
 
     // 清除该标签页的防抖定时器
@@ -664,17 +726,56 @@ chrome.tabs.onRemoved.addListener(function (tabId, removeInfo) {
         debounceTimers.delete(tabId);
         log(`[网页总结] 已清除标签页 ${tabId} 的防抖定时器`);
     }
+
+    // 获取关闭标签页的URL
+    const closedTabUrl = tabUrlMap.get(tabId);
+    if (closedTabUrl) {
+        // 从映射中移除
+        tabUrlMap.delete(tabId);
+        
+        // 只处理普通的HTTP/HTTPS页面
+        if (!closedTabUrl.startsWith('chrome://') && !closedTabUrl.startsWith('chrome-extension://')) {
+            // 检查该URL是否还被其他标签页使用
+            const isStillInUse = await isUrlStillInUse(closedTabUrl);
+            if (!isStillInUse) {
+                // 如果没有其他标签页使用该URL，则清理缓存
+                await removeSummaryFromCache(closedTabUrl);
+                log(`[缓存管理] 标签页 ${tabId} 关闭，URL ${closedTabUrl} 已无人使用，已清理缓存`);
+            } else {
+                log(`[缓存管理] 标签页 ${tabId} 关闭，但URL ${closedTabUrl} 仍被其他标签页使用，保留缓存`);
+            }
+        }
+    } else {
+        log(`[缓存管理] 无法获取标签页 ${tabId} 的URL信息，跳过缓存清理`);
+    }
 });
 
 // 监听标签页更新事件
 chrome.tabs.onUpdated.addListener(function (tabId, changeInfo, tab) {
     if (changeInfo.url && tab.url) {
         log('标签页URL已更新:' + changeInfo.url);
+        
+        // 更新URL映射
+        tabUrlMap.set(tabId, tab.url);
 
         // 只处理普通 HTTP/HTTPS 页面
         if (!tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
             // 使用防抖机制，避免重定向时频繁调用
             summarizeTabWithDebounce(tabId, tab.url);
+        }
+    }
+    
+    // 监听页面刷新（页面加载完成时触发）
+    if (changeInfo.status === 'complete' && tab.url) {
+        log('标签页页面加载完成（刷新）:' + tab.url);
+        
+        // 更新URL映射
+        tabUrlMap.set(tabId, tab.url);
+        
+        // 只处理普通 HTTP/HTTPS 页面
+        if (!tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
+            // 强制重新总结（跳过缓存检查）
+            summarizeTabWithForceRefresh(tabId, tab.url);
         }
     }
 });
