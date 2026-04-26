@@ -1,7 +1,7 @@
 import AiTabService from './aiServive'
 import { log, type PageSummaryResult } from './aiServive';
 import type { TabInfo, GroupInfo, AiConfig } from './aiServive';
-import { getDefaultProvider, getAllProviderTypes } from './configStorage';
+import { getDefaultProvider, getAllProviderTypes, loadCustomDict } from './configStorage';
 import { parseHTML } from 'linkedom';
 const TAB_HTML_TIMEOUT = 5000; // 5秒超时
 const SUMMARY_DEBOUNCE_DELAY = 2000; // 防抖延迟：2秒
@@ -196,8 +196,6 @@ async function groupTabs(waitForSummary: boolean = false) {
         log('[AI分组] 已存在分组数量:' + existingGroups.length);
 
         // 获取AI服务
-        log('[AI分组] 步骤4: 初始化AI服务...');
-
         const aiConfig: AiConfig = {
             key: defaultProvider.key,
             model: defaultProvider.model,
@@ -205,8 +203,11 @@ async function groupTabs(waitForSummary: boolean = false) {
         };
 
         log('[AI分组] 使用供应商: ' + defaultProvider.name + ', 模型: ' + defaultProvider.model);
+        log('[AI分组] 步骤4: 初始化AI服务...');
+        const customWords = await loadCustomDict();
+        log('[AI分组] 自定义词库词数: ' + customWords.length);
         const aiService = new AiTabService(ungroupedTabs, existingGroups, aiConfig);
-        await aiService.group()
+        await aiService.group(customWords);
         log('[AI分组] AI服务初始化成功');
     } catch (err) {
         console.log(err);
@@ -749,6 +750,14 @@ chrome.tabs.onRemoved.addListener(async function (tabId, removeInfo) {
         log(`[缓存管理] 无法获取标签页 ${tabId} 的URL信息，跳过缓存清理`);
     }
 });
+
+/**
+ * 强制刷新总结（清除缓存后重新总结）
+ */
+async function summarizeTabWithForceRefresh(tabId: number, url: string) {
+    await removeSummaryFromCache(url);
+    await summarizeTabWithDebounce(tabId, url, true);
+}
 
 // 监听标签页更新事件
 chrome.tabs.onUpdated.addListener(function (tabId, changeInfo, tab) {
