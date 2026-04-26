@@ -185,8 +185,7 @@ export async function saveProvider(
     providerType: ProviderType,
     key: string,
     model: string,
-    isDefault: boolean,
-    useExactMode: boolean
+    isDefault: boolean
 ): Promise<string> {
     const config = await loadAiConfig();
     const providerTypes = await loadProviderTypesConfig();
@@ -205,7 +204,6 @@ export async function saveProvider(
         model,
         baseUrl: providerInfo.baseUrl,
         isDefault,
-        useExactMode
     };
 
     if (existingIndex !== -1) {
@@ -285,4 +283,34 @@ export async function getProviderByType(providerType: ProviderType): Promise<AiP
         return null;
     }
     return config.providers.find(p => p.name === providerInfo.name) || null;
+}
+
+const CUSTOM_DICT_STORAGE_KEY = 'customDictStorage';
+
+/**
+ * 加载自定义词库
+ */
+export async function loadCustomDict(): Promise<string[]> {
+    try {
+        const result = await chrome.storage.sync.get(CUSTOM_DICT_STORAGE_KEY);
+        if (result[CUSTOM_DICT_STORAGE_KEY]) {
+            return (result[CUSTOM_DICT_STORAGE_KEY] as { words: string[] }).words || [];
+        }
+        return [];
+    } catch (error) {
+        console.error('加载自定义词库失败:', error);
+        return [];
+    }
+}
+
+/**
+ * 保存自定义词库
+ */
+export async function saveCustomDict(words: string[]): Promise<void> {
+    try {
+        await chrome.storage.sync.set({ [CUSTOM_DICT_STORAGE_KEY]: { words } });
+    } catch (error) {
+        console.error('保存自定义词库失败:', error);
+        throw error;
+    }
 }
