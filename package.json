@@ -30,6 +30,7 @@
     "langchain": "^1.2.3",
     "linkedom": "^0.18.12",
     "pinia": "^3.0.4",
+    "segmentit": "^2.0.3",
     "vue": "^3.5.25",
     "vue-router": "^4.6.4"
   },
