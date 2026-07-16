@@ -12,7 +12,7 @@
           @keyup.enter="addWord"
           class="word-input"
         />
-        <button @click="addWord" class="btn">添加</button>
+        <button @click="addWord" class="btn add-btn">添加</button>
       </div>
       <div v-if="addError" class="status error">{{ addError }}</div>
     </div>
@@ -116,8 +116,17 @@ onMounted(async () => {
   align-items: center;
 }
 
+.add-btn {
+  flex-shrink: 0;
+  width: auto;
+  min-width: unset;
+  padding: 10px 20px;
+  white-space: nowrap;
+}
+
 .word-input {
   flex: 1;
+  min-width: 0;
   padding: 10px 14px;
   border: 1px solid #e0e0e0;
   border-radius: 8px;

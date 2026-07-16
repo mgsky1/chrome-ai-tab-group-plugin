@@ -36,3 +36,6 @@ coverage
 __screenshots__/
 
 screenshot/*
+.claude
+.vscode
+release

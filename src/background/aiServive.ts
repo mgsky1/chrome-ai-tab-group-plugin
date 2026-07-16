@@ -1,4 +1,4 @@
-const DEBUG = true;
+const DEBUG = false;
 
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
@@ -155,9 +155,8 @@ export function extractKeywords(text: string, customWords: string[] = []): strin
         }
 
         // 按分数排序，取前 3-5 个
-        const sorted = wordSet
-            .sort((a, b) => (scores[b] ?? 0) - (scores[a] ?? 0));
-
+        const sorted = wordSet.sort((a, b) => (scores[b] ?? 0) - (scores[a] ?? 0));
+    
         return sorted.slice(0, Math.min(5, sorted.length));
 
     } catch (error) {
@@ -178,7 +177,7 @@ export default class AiTabService {
     }
 
     private buildPrompt() {
-        let prompt = "请根据以下网页标题和关键词对标签页进行智能分组。相同类型或主题的网页应该归为一组。\n";
+        let prompt = "请根据以下网页标题和关键词对标签页进行分组。相同类型或主题的网页应该归为一组。\n";
         prompt += "待分组的标签页列表（索引从0开始）：\n";
         prompt += this.ungroupTabInfos.map((tab, index) => {
             const keywordsStr = (tab.keywords && tab.keywords.length > 0)
@@ -189,11 +188,7 @@ export default class AiTabService {
         if (this.existGroup.length > 0) {
             prompt += "\n已存在的分组（如果新标签页属于某个已有分组，请将其归入该分组）：\n";
             this.existGroup.forEach(g => {
-                prompt += "分组" + g.title + "包含的标签页:\n";
-                g.tabDetails?.forEach(t => {
-                    prompt += "- " + t.title + "\n";
-                });
-                prompt += "\n";
+                prompt += "分组" + g.title + "\n";
             });
         }
         prompt += `请返回JSON格式的结果，格式如下：
@@ -211,10 +206,9 @@ export default class AiTabService {
     1. 如果标签页可以归入已有分组，请将其放在"existingGroups"中对应的分组下
     2. 如果标签页无法归入已有分组，请创建新分组，放在"newGroups"中
     3. 分组名称应该简洁明了，能够概括该组标签的主题（2-6个中文字符）
-    4. 每个分组至少包含1个标签页
-    5. 所有待分组的标签页都必须被分配到一个分组中
-    6. 只返回JSON，不要包含其他文字说明
-    7. 只需要关注待分组的标签页
+    4. 所有待分组的标签页都必须被分配到一个分组中
+    5. 只返回JSON，不要包含其他文字说明
+    6. 只需要关注待分组的标签页
 
     请开始分析并返回JSON结果：`;
         return prompt;
@@ -245,8 +239,10 @@ export default class AiTabService {
     public async summarizePage(
         tabId: number,
         doc: Document,
-        customWords: string[] = []
+        customWords?: string[] | null
     ): Promise<PageSummaryResult | null> {
+        // 确保 customWords 是数组类型
+        const safeCustomWords = Array.isArray(customWords) ? customWords : [];
         try {
             const tab = await chrome.tabs.get(tabId);
             if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://')) {
@@ -256,22 +252,62 @@ export default class AiTabService {
 
             log(`[关键词提取] 开始提取标签页 ${tabId}: ${tab.title}`);
 
-            // 剥离 HTML，提取纯文本（克隆 body 避免修改原始 Document）
-            const body = doc.body.cloneNode(true) as HTMLElement;
-            const removeTags = ['img', 'script', 'style', 'iframe', 'meta'];
-            removeTags.forEach(tag => {
-                const elements = body.querySelectorAll(tag);
-                elements.forEach(el => el.remove());
+            // 使用正则表达式提取纯文本，保留段落结构
+            let htmlContent = doc.body.innerHTML;
+            
+            // 移除 script 和 style 标签及其内容
+            htmlContent = htmlContent.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
+            htmlContent = htmlContent.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
+            
+            // 移除 HTML 注释
+            htmlContent = htmlContent.replace(/<!--[\s\S]*?-->/g, '');
+            
+            // 移除常见的非内容标签（只移除标签，保留可能的内容）
+            htmlContent = htmlContent.replace(/<(img|iframe|meta|link|svg|path|symbol|use)[^>]*\/?>/gi, '');
+            
+            // 将块级元素转换为换行符（保留段落结构）
+            // 常见的块级元素：div, p, h1-h6, br, li, tr, blockquote, pre, hr 等
+            htmlContent = htmlContent.replace(/<\/(div|p|h[1-6]|br|li|tr|blockquote|pre|hr|section|article|header|footer|nav|aside|main|figure|figcaption|details|summary)[^>]*>/gi, '\n');
+            htmlContent = htmlContent.replace(/<br\s*\/?>/gi, '\n');
+            
+            // 移除所有剩余的HTML标签
+            htmlContent = htmlContent.replace(/<[^>]+>/g, '');
+            
+            // 解码HTML实体
+            htmlContent = htmlContent.replace(/&nbsp;/g, ' ');
+            htmlContent = htmlContent.replace(/&amp;/g, '&');
+            htmlContent = htmlContent.replace(/&lt;/g, '<');
+            htmlContent = htmlContent.replace(/&gt;/g, '>');
+            htmlContent = htmlContent.replace(/&quot;/g, '"');
+            htmlContent = htmlContent.replace(/&#39;/g, "'");
+            htmlContent = htmlContent.replace(/&#[\d]+;/g, (match) => {
+                const code = parseInt(match.slice(2, -1));
+                return String.fromCharCode(code);
             });
-            const text = (body.textContent || '').trim().replace(/\s+/g, ' ');
+            
+            // 移除URL（http/https/ftp/mailto等）
+            htmlContent = htmlContent.replace(/https?:\/\/[^\s<>"]+/g, '');
+            htmlContent = htmlContent.replace(/ftp:\/\/[^\s<>"]+/g, '');
+            htmlContent = htmlContent.replace(/mailto:[^\s<>"]+/g, '');
+            
+            // 清理空白字符，但保留换行符
+            let text = htmlContent
+                .split('\n')
+                .map(line => line.trim().replace(/[ \t]+/g, ' ').trim())  // 每行内部合并空格
+                .filter(line => line.length > 0)  // 移除空行
+                .join('\n');  // 用换行符连接非空行
+            
+            // 最终清理：确保没有多余的连续换行
+            text = text.replace(/\n{3,}/g, '\n\n');  // 最多保留两个连续换行
+            
+            log(`[关键词提取] 文本提取完成，长度: ${text.length}, 行数: ${text.split('\n').length}`);
 
             if (!text) {
                 log(`[关键词提取] 标签页 ${tabId} 文本为空`);
                 return { keywords: [] };
             }
 
-            const keywords = extractKeywords(text, customWords);
-            log(`[关键词提取] 标签页 ${tabId} 提取完成，关键词: ${keywords.join(', ')}`);
+            const keywords = extractKeywords(text, safeCustomWords);
             return { keywords };
 
         } catch (error) {
@@ -619,36 +655,6 @@ export default class AiTabService {
         return colors[randomIndex] as chrome.tabGroups.Color;
     }
 
-    /**
-     * 从 LocalStorage 读取网页总结结果
-     */
-    private async loadPageSummaryFromStorage(url: string): Promise<PageSummaryResult | null> {
-        try {
-            const result = await chrome.storage.local.get(SUMMARY_STORAGE_KEY);
-            const summaries = (result[SUMMARY_STORAGE_KEY] as Record<string, { summary: PageSummaryResult }>) || {};
-            const summaryData = summaries[url];
-            if (summaryData && summaryData.summary) {
-                log(`[AI分组] 从 LocalStorage 读取到标签页 ${url} 的总结结果`);
-                return summaryData.summary;
-            }
-            return null;
-        } catch (error) {
-            log(`[AI分组] 从 LocalStorage 读取总结结果失败: ${error}`);
-            return null;
-        }
-    }
-
-    private async savePageSummaryToStorage(url: string, summary: PageSummaryResult): Promise<void> {
-        try {
-            const result = await chrome.storage.local.get(SUMMARY_STORAGE_KEY);
-            const summaries = (result[SUMMARY_STORAGE_KEY] as Record<string, { summary: PageSummaryResult }>) || {};
-            summaries[url] = { summary };
-            await chrome.storage.local.set({ [SUMMARY_STORAGE_KEY]: summaries });
-        } catch (error) {
-            log(`[AI分组] 保存关键词到缓存失败: ${error}`);
-        }
-    }
-
     public async group(customWords: string[] = []) {
         log('[AI分组] 开始处理标签页关键词提取...');
         await Promise.all(
@@ -658,24 +664,13 @@ export default class AiTabService {
                     return;
                 }
 
-                log(`[AI分组] 处理标签页 ${tab.id}: ${tab.title}`);
-
-                // 优先从 LocalStorage 读取缓存的关键词
-                const savedSummary = await this.loadPageSummaryFromStorage(tab.url);
-                if (savedSummary) {
-                    tab.keywords = savedSummary.keywords;
-                    log(`[AI分组] 标签页 ${tab.id} 使用缓存关键词: ${tab.keywords?.join(', ')}`);
-                    return;
-                }
-
-                // 没有缓存，使用 doc 实时提取
+                // 使用 doc 实时提取
                 if (tab.doc) {
                     const result = await this.summarizePage(tab.id!, tab.doc, customWords);
                     if (result) {
                         tab.keywords = result.keywords;
-                        await this.savePageSummaryToStorage(tab.url, result);
-                        log(`[AI分组] 标签页 ${tab.id} 关键词提取完成: ${tab.keywords?.join(', ')}`);
                     }
+                    log(`[AI分组] 处理标签页 ${tab.id}: ${tab.title}, 关键词: ${tab.keywords?.join(', ')}`);
                 } else {
                     log(`[AI分组] 标签页 ${tab.id} 无 doc，跳过关键词提取`);
                 }
@@ -687,6 +682,7 @@ export default class AiTabService {
         log(prompt);
         log('[AI分组] 提示词构建完成，开始调用AI...');
         const response = await this.sendToAi(prompt);
+        log(response);
         log('[AI分组] AI响应接收完成，开始解析...');
         const groupResult = this.parseContent(response);
         log('[AI分组] 解析完成，开始执行分组操作...');
