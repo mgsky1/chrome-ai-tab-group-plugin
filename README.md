@@ -10,6 +10,10 @@
 
 [Chrome应用商店下载地址](https://chromewebstore.google.com/detail/ai-tab/gkkilbkkklfjacnleenilelejbnamjjh?hl=zh-CN&utm_source=ext_sidebar)
 
+或
+
+[githubRelease](https://github.com/mgsky1/chrome-ai-tab-group-plugin/releases)
+
 ## 配置
 
 安装后进入设置 --> 管理AI供应商类型，添加AI大模型供应商
