@@ -156,7 +156,7 @@ export function extractKeywords(text: string, customWords: string[] = []): strin
 
         // 按分数排序，取前 3-5 个
         const sorted = wordSet.sort((a, b) => (scores[b] ?? 0) - (scores[a] ?? 0));
-    
+
         return sorted.slice(0, Math.min(5, sorted.length));
 
     } catch (error) {
@@ -254,25 +254,25 @@ export default class AiTabService {
 
             // 使用正则表达式提取纯文本，保留段落结构
             let htmlContent = doc.body.innerHTML;
-            
+
             // 移除 script 和 style 标签及其内容
             htmlContent = htmlContent.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
             htmlContent = htmlContent.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
-            
+
             // 移除 HTML 注释
             htmlContent = htmlContent.replace(/<!--[\s\S]*?-->/g, '');
-            
+
             // 移除常见的非内容标签（只移除标签，保留可能的内容）
             htmlContent = htmlContent.replace(/<(img|iframe|meta|link|svg|path|symbol|use)[^>]*\/?>/gi, '');
-            
+
             // 将块级元素转换为换行符（保留段落结构）
             // 常见的块级元素：div, p, h1-h6, br, li, tr, blockquote, pre, hr 等
             htmlContent = htmlContent.replace(/<\/(div|p|h[1-6]|br|li|tr|blockquote|pre|hr|section|article|header|footer|nav|aside|main|figure|figcaption|details|summary)[^>]*>/gi, '\n');
             htmlContent = htmlContent.replace(/<br\s*\/?>/gi, '\n');
-            
+
             // 移除所有剩余的HTML标签
             htmlContent = htmlContent.replace(/<[^>]+>/g, '');
-            
+
             // 解码HTML实体
             htmlContent = htmlContent.replace(/&nbsp;/g, ' ');
             htmlContent = htmlContent.replace(/&amp;/g, '&');
@@ -284,22 +284,22 @@ export default class AiTabService {
                 const code = parseInt(match.slice(2, -1));
                 return String.fromCharCode(code);
             });
-            
+
             // 移除URL（http/https/ftp/mailto等）
             htmlContent = htmlContent.replace(/https?:\/\/[^\s<>"]+/g, '');
             htmlContent = htmlContent.replace(/ftp:\/\/[^\s<>"]+/g, '');
             htmlContent = htmlContent.replace(/mailto:[^\s<>"]+/g, '');
-            
+
             // 清理空白字符，但保留换行符
             let text = htmlContent
                 .split('\n')
                 .map(line => line.trim().replace(/[ \t]+/g, ' ').trim())  // 每行内部合并空格
                 .filter(line => line.length > 0)  // 移除空行
                 .join('\n');  // 用换行符连接非空行
-            
+
             // 最终清理：确保没有多余的连续换行
             text = text.replace(/\n{3,}/g, '\n\n');  // 最多保留两个连续换行
-            
+
             log(`[关键词提取] 文本提取完成，长度: ${text.length}, 行数: ${text.split('\n').length}`);
 
             if (!text) {

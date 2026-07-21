@@ -25,7 +25,7 @@ async function getAllTabs() {
 
     log('[AI分组] 开始获取所有标签页的HTML内容...');
 
-    const result = await Promise.all(normalTabs.map(async tab => {
+    const processedTabs = await Promise.all(normalTabs.map(async tab => {
         let doc: Document | undefined = undefined;
         if (tab.id) {
             doc = await getTabHTMLDocWithTimeout(tab.id, TAB_HTML_TIMEOUT);
@@ -34,7 +34,7 @@ async function getAllTabs() {
         if (doc) {
             log(`[AI分组] 标签页 ${tab.id} (${tab.title}) Doc获取成功`);
         } else if (tab.id) {
-            log(`[AI分组] 标签页 ${tab.id} (${tab.title}) 获取Doc超时或失败`);
+            console.log(`[AI分组] 标签页 ${tab.id} (${tab.title}) 获取Doc超时或失败或不可访问`);
         }
         return {
             id: tab.id,
@@ -45,7 +45,10 @@ async function getAllTabs() {
             doc: doc
         };
     }));
-    log('[AI分组] 所有标签页HTML内容获取完成');
+
+    // 过滤掉doc内容为空的项目
+    const result = processedTabs.filter(tab => tab.doc);
+    log('[AI分组] 所有标签页HTML内容获取完成，有效标签页数: ' + result.length);
     return result;
 }
 
