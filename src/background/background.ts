@@ -47,7 +47,12 @@ async function getAllTabs() {
     }));
 
     // 过滤掉doc内容为空的项目
-    const result = processedTabs.filter(tab => tab.doc);
+    const result = processedTabs.filter(function (tab: { id: number | undefined, title: string | undefined, url: string | undefined, groupId: number | undefined, windowId: number | undefined, doc: Document | undefined }) {
+        if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://')) {
+            return false;
+        }
+        return true;
+    });
     log('[AI分组] 所有标签页HTML内容获取完成，有效标签页数: ' + result.length);
     return result;
 }
