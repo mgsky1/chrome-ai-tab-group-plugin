@@ -90,13 +90,15 @@ export function extractKeywords(text: string, customWords: string[] = []): strin
         if (customWords.length > 0) {
             const dictStr = customWords
                 .filter(w => w.trim())
-                .map(w => `${w.trim()}|1000|1`)
+                .map(w => `${w}|0x00000080|9999`)
                 .join('\n');
+            log('已加载自定义词库: ' + dictStr);
             segment.loadDict(dictStr);
         }
 
         // 分词
-        const words: string[] = segment.doSegment(text, { simple: true });
+        const words: string[] = segment.doSegment(text, { simple: true, stripPunctuation:true, stripStopword:true, convertSynonym:true });
+        //log('分词结果: ' + words.join(', '));
 
         // 过滤停用词和单字词（保留自定义词）
         const customWordSet = new Set(customWords.map(w => w.trim()));

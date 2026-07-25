@@ -293,9 +293,32 @@ const CUSTOM_DICT_STORAGE_KEY = 'customDictStorage';
 export async function loadCustomDict(): Promise<string[]> {
     try {
         const result = await chrome.storage.sync.get(CUSTOM_DICT_STORAGE_KEY);
-        if (result[CUSTOM_DICT_STORAGE_KEY]) {
-            return (result[CUSTOM_DICT_STORAGE_KEY] as { words: string[] }).words || [];
+        const data = result[CUSTOM_DICT_STORAGE_KEY];
+        if (!data) return [];
+
+        // 标准格式: { words: string[] }
+        if (data && typeof data === 'object' && !Array.isArray(data) && Array.isArray((data as any).words)) {
+            return (data as any).words as string[];
         }
+
+        // 兼容格式: { words: { "0": "a", "1": "b" } } — 类数组对象
+        if (data && typeof data === 'object' && !Array.isArray(data) && (data as any).words && typeof (data as any).words === 'object') {
+            const wordsObj = (data as any).words;
+            const values = Object.values(wordsObj).filter((v: any) => typeof v === 'string');
+            if (values.length > 0) {
+                // 异步迁移到标准格式
+                saveCustomDict(values as string[]).catch(() => {});
+                return values as string[];
+            }
+        }
+
+        // 兼容旧格式：直接存的是 string[]
+        if (Array.isArray(data)) {
+            saveCustomDict(data as string[]).catch(() => {});
+            return data as string[];
+        }
+
+        console.warn('[词库] 存储数据格式无法识别, 实际数据:', JSON.stringify(data));
         return [];
     } catch (error) {
         console.error('加载自定义词库失败:', error);
