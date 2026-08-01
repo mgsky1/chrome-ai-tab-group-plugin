@@ -39,3 +39,5 @@ screenshot/*
 .claude
 .vscode
 release
+# transformers.js / onnxruntime 运行时产物，由 scripts/copy-vendor.mjs 生成
+public/vendor/

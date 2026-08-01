@@ -13,6 +13,18 @@ export default defineConfig({
     crx({ manifest }),
     zip({ outDir: 'release', outFileName: 'release.zip' }),
   ],
+  build: {
+    rollupOptions: {
+      input: {
+        offscreen: 'src/pages/offscreen/index.html',
+      },
+    },
+  },
+  optimizeDeps: {
+    // transformers 的 web 产物不能被预打包/二次打包，
+    // offscreen 里是通过 vendor 目录运行时加载的
+    exclude: ['@huggingface/transformers', 'onnxruntime-web'],
+  },
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url))
