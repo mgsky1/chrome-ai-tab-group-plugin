@@ -38,4 +38,6 @@ __screenshots__/
 screenshot/*
 .claude
 .vscode
-release
+release/
+release-used/
+public/vendor/

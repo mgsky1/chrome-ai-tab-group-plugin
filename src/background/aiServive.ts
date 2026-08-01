@@ -1,8 +1,10 @@
-const DEBUG = false;
+const DEBUG = true;
 
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { Segment, useDefault } from 'segmentit';
+import { Readability } from '@mozilla/readability';
+import { parseHTML } from 'linkedom';
 const SUMMARY_STORAGE_KEY = 'pageSummaries';
 
 export type TabInfo = {
@@ -13,6 +15,7 @@ export type TabInfo = {
     windowId?: number;
     doc?: Document;
     keywords?: string[];
+    summary?: string;
 };
 
 export type GroupInfo = {
@@ -57,6 +60,7 @@ export function log(msg: any) {
 
 export type PageSummaryResult = {
     keywords: string[];
+    summary: string;
 };
 
 // 中文停用词列表
@@ -97,7 +101,7 @@ export function extractKeywords(text: string, customWords: string[] = []): strin
         }
 
         // 分词
-        const words: string[] = segment.doSegment(text, { simple: true, stripPunctuation:true, stripStopword:true, convertSynonym:true });
+        const words: string[] = segment.doSegment(text, { simple: true, stripPunctuation: true, stripStopword: true, convertSynonym: true });
         //log('分词结果: ' + words.join(', '));
 
         // 过滤停用词和单字词（保留自定义词）
@@ -167,6 +171,90 @@ export function extractKeywords(text: string, customWords: string[] = []): strin
     }
 }
 
+/**
+ * 用 @mozilla/readability 提取网页正文
+ * 相比手写正则，它会自动剔除导航、广告、侧边栏等噪音，只保留主体内容
+ */
+function extractReadableText(doc: Document, url?: string): { title: string; text: string } {
+    // Readability 会直接修改传入的 document，所以先克隆一份，避免影响调用方
+    const { document: workingDoc } = parseHTML(doc.documentElement.outerHTML);
+
+    // 提供 base URL，帮助 Readability 正确处理相对链接
+    if (url) {
+        try {
+            const base = workingDoc.createElement('base');
+            base.setAttribute('href', url);
+            workingDoc.head?.appendChild(base);
+        } catch {
+            // 忽略：没有 base 也能解析，只是相对链接不会被补全
+        }
+    }
+
+    const article = new Readability(workingDoc as unknown as Document, {
+        charThreshold: 100, // 中文页面正文往往较短，降低阈值避免直接放弃
+    }).parse();
+
+    if (article?.content) {
+        return {
+            title: article.title ?? '',
+            text: htmlToText(article.content),
+        };
+    }
+
+    // Readability 判定为“非文章页”（如首页、控制台、应用型页面）时退回全文文本
+    const fallback = doc.body?.textContent ?? '';
+    return {
+        title: doc.title ?? '',
+        text: fallback
+            .split('\n')
+            .map(line => line.replace(/[ \t\u00a0]+/g, ' ').trim())
+            .filter(Boolean)
+            .join('\n')
+            .replace(/\n{3,}/g, '\n\n'),
+    };
+}
+
+// 需要转换成换行的块级元素，保证提取出的正文仍有段落结构
+const BLOCK_TAGS = new Set([
+    'P', 'DIV', 'BR', 'LI', 'TR', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
+    'BLOCKQUOTE', 'PRE', 'HR', 'SECTION', 'ARTICLE', 'HEADER', 'FOOTER',
+    'FIGURE', 'FIGCAPTION', 'TABLE', 'UL', 'OL', 'DL', 'DT', 'DD',
+]);
+
+// 把 Readability 输出的正文 HTML 转成带段落结构的纯文本
+function htmlToText(html: string): string {
+    // 注意：linkedom 需要完整的 html 结构，只传 <body> 片段会解析出空文档
+    const { document: doc } = parseHTML(`<!DOCTYPE html><html><body>${html}</body></html>`);
+    const lines: string[] = [];
+    let current = '';
+
+    const flush = () => {
+        const line = current.replace(/[ \t\u00a0]+/g, ' ').trim();
+        if (line) lines.push(line);
+        current = '';
+    };
+
+    const walk = (node: Node) => {
+        if (node.nodeType === 3 /* TEXT_NODE */) {
+            current += node.nodeValue ?? '';
+            return;
+        }
+        if (node.nodeType !== 1 /* ELEMENT_NODE */) return;
+
+        const tag = (node as Element).tagName?.toUpperCase();
+        const isBlock = tag ? BLOCK_TAGS.has(tag) : false;
+        if (isBlock) flush();
+        node.childNodes.forEach(walk);
+        if (isBlock) flush();
+    };
+
+    doc.body.childNodes.forEach(walk);
+    flush();
+
+    // return lines.join('\n').replace(/\n{3,}/g, '\n\n');
+    return lines[0] ?? ""
+}
+
 export default class AiTabService {
     private ungroupTabInfos: TabInfo[];
     private existGroup: GroupInfo[];
@@ -185,7 +273,7 @@ export default class AiTabService {
             const keywordsStr = (tab.keywords && tab.keywords.length > 0)
                 ? tab.keywords.join(', ')
                 : '无';
-            return `${index}: 标题:${tab.title}; 关键词: [${keywordsStr}]`;
+            return `${index}: 标题:${tab.title}; 关键词: [${keywordsStr}]; 关键文本: ${tab.summary}`;
         }).join('\n\n');
         if (this.existGroup.length > 0) {
             prompt += "\n已存在的分组（如果新标签页属于某个已有分组，请将其归入该分组）：\n";
@@ -254,63 +342,18 @@ export default class AiTabService {
 
             log(`[关键词提取] 开始提取标签页 ${tabId}: ${tab.title}`);
 
-            // 使用正则表达式提取纯文本，保留段落结构
-            let htmlContent = doc.body.innerHTML;
+            // 使用 @mozilla/readability 提取正文（自动剔除导航/广告/侧边栏等噪音）
+            const { title: articleTitle, text } = extractReadableText(doc, tab.url);
 
-            // 移除 script 和 style 标签及其内容
-            htmlContent = htmlContent.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
-            htmlContent = htmlContent.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
-
-            // 移除 HTML 注释
-            htmlContent = htmlContent.replace(/<!--[\s\S]*?-->/g, '');
-
-            // 移除常见的非内容标签（只移除标签，保留可能的内容）
-            htmlContent = htmlContent.replace(/<(img|iframe|meta|link|svg|path|symbol|use)[^>]*\/?>/gi, '');
-
-            // 将块级元素转换为换行符（保留段落结构）
-            // 常见的块级元素：div, p, h1-h6, br, li, tr, blockquote, pre, hr 等
-            htmlContent = htmlContent.replace(/<\/(div|p|h[1-6]|br|li|tr|blockquote|pre|hr|section|article|header|footer|nav|aside|main|figure|figcaption|details|summary)[^>]*>/gi, '\n');
-            htmlContent = htmlContent.replace(/<br\s*\/?>/gi, '\n');
-
-            // 移除所有剩余的HTML标签
-            htmlContent = htmlContent.replace(/<[^>]+>/g, '');
-
-            // 解码HTML实体
-            htmlContent = htmlContent.replace(/&nbsp;/g, ' ');
-            htmlContent = htmlContent.replace(/&amp;/g, '&');
-            htmlContent = htmlContent.replace(/&lt;/g, '<');
-            htmlContent = htmlContent.replace(/&gt;/g, '>');
-            htmlContent = htmlContent.replace(/&quot;/g, '"');
-            htmlContent = htmlContent.replace(/&#39;/g, "'");
-            htmlContent = htmlContent.replace(/&#[\d]+;/g, (match) => {
-                const code = parseInt(match.slice(2, -1));
-                return String.fromCharCode(code);
-            });
-
-            // 移除URL（http/https/ftp/mailto等）
-            htmlContent = htmlContent.replace(/https?:\/\/[^\s<>"]+/g, '');
-            htmlContent = htmlContent.replace(/ftp:\/\/[^\s<>"]+/g, '');
-            htmlContent = htmlContent.replace(/mailto:[^\s<>"]+/g, '');
-
-            // 清理空白字符，但保留换行符
-            let text = htmlContent
-                .split('\n')
-                .map(line => line.trim().replace(/[ \t]+/g, ' ').trim())  // 每行内部合并空格
-                .filter(line => line.length > 0)  // 移除空行
-                .join('\n');  // 用换行符连接非空行
-
-            // 最终清理：确保没有多余的连续换行
-            text = text.replace(/\n{3,}/g, '\n\n');  // 最多保留两个连续换行
-
-            log(`[关键词提取] 文本提取完成，长度: ${text.length}, 行数: ${text.split('\n').length}`);
+            log(`[关键词提取] 文本提取完成，长度: ${text.length}, 行数: ${text.split('\n').length}, 原文：${text}`);
 
             if (!text) {
                 log(`[关键词提取] 标签页 ${tabId} 文本为空`);
-                return { keywords: [] };
+                return { keywords: [], summary: '' };
             }
 
             const keywords = extractKeywords(text, safeCustomWords);
-            return { keywords };
+            return { keywords: keywords, summary: text };
 
         } catch (error) {
             log(`[关键词提取] 标签页 ${tabId} 提取过程出错: ${error}`);
@@ -671,6 +714,7 @@ export default class AiTabService {
                     const result = await this.summarizePage(tab.id!, tab.doc, customWords);
                     if (result) {
                         tab.keywords = result.keywords;
+                        tab.summary = result.summary;
                     }
                     log(`[AI分组] 处理标签页 ${tab.id}: ${tab.title}, 关键词: ${tab.keywords?.join(', ')}`);
                 } else {
